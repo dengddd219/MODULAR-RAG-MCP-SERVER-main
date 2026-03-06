@@ -1,0 +1,110 @@
+# Modular RAG MCP Server - Configuration
+# This is the main configuration file for the MCP Server.
+# Edit this file to configure LLM, Embedding, VectorStore, and other services.
+
+# =============================================================================
+# LLM Configuration
+# =============================================================================
+# =============================================================================
+# LLM Configuration
+# =============================================================================
+llm:
+  provider: "openai"
+  model: "gpt-4o-mini"   # 注意：我帮你把 gpt-4.1-mini 改成了 gpt-4o-mini，因为目前官方并没有 4.1-mini 这个模型名称，容易报错
+  temperature: 0.2
+  max_tokens: 512
+  api_key: "sk-zk2568a672f71fed91626699ad0ffe9f41d69aa7c7ba7ef5"
+  base_url: "https://api.zhizengzeng.com/v1"  # 代理地址（注意：不要加 /chat/completions，SDK 会自动拼接）
+
+# =============================================================================
+# Embedding Configuration
+# =============================================================================
+embedding:
+  provider: "openai"
+  model: "text-embedding-3-small"   
+  dimensions: 768             
+  base_url: "https://api.zhizengzeng.com/v1"  # 代理地址（注意：不要加 /chat/completions，SDK 会自动拼接）
+  api_key: "sk-zk2568a672f71fed91626699ad0ffe9f41d69aa7c7ba7ef5" # <--- 新增这一行，防止底层代码没有共用 LLM 的 Key
+
+# =============================================================================
+# Vision LLM Configuration (for Image Captioning)
+# =============================================================================
+vision_llm:
+  enabled: false               # 需要完全关闭图像能力时可以改为 false
+  provider: "azure"           # 目前仅支持 azure 作为 Vision LLM provider
+  model: "gpt-4o"             # Azure 上对应的多模态模型名称/能力
+  # Azure-specific settings (if provider is azure):
+  azure_endpoint: ""          # 例如: https://your-resource-name.openai.azure.com
+  deployment_name: "gpt-4o"   # 你在 Azure 上创建的部署名
+  api_version: "2024-02-15-preview"
+  api_key: ""                 # 在这里填入 Azure OpenAI 的密钥
+  max_image_size: 2048        # Max dimension (width/height) for image compression
+
+# =============================================================================
+# Vector Store Configuration
+# =============================================================================
+vector_store:
+  provider: "chroma"  # Options: chroma, qdrant, pinecone
+  persist_directory: "./data/db/chroma"
+  collection_name: "knowledge_hub"
+
+# =============================================================================
+# Retrieval Configuration
+# =============================================================================
+retrieval:
+  dense_top_k: 20
+  sparse_top_k: 20
+  fusion_top_k: 10
+  rrf_k: 60  # RRF constant
+
+# =============================================================================
+# Rerank Configuration
+# =============================================================================
+rerank:
+  enabled: false
+  provider: "none"  # Options: none, cross_encoder, llm
+  model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  top_k: 5
+
+# =============================================================================
+# Evaluation Configuration
+# =============================================================================
+evaluation:
+  enabled: true             # 开启评估模块
+  provider: "ragas"         # 关键！这里必须填入一个系统支持的名称（如 ragas, deepeval 或 custom）
+  metrics:                  # 具体的体检指标
+    - "faithfulness"
+    - "answer_relevancy"
+
+# =============================================================================
+# Observability Configuration
+# =============================================================================
+observability:
+  log_level: "INFO"  # Options: DEBUG, INFO, WARNING, ERROR (INFO recommended for production)
+  trace_enabled: false  # Set to false for better performance, enable only when debugging
+  trace_file: "./logs/traces.jsonl"
+  structured_logging: true
+
+# =============================================================================
+# Ingestion Configuration
+# =============================================================================
+ingestion:
+  chunk_size: 1000        # <--- 参数1：这里改每个分块的大小（字符数）
+  chunk_overlap: 200      # <--- 参数2：这里改分块之间的重叠部分（防止语义切断）
+  splitter: "recursive"   # <--- 策略：这里改切分算法。可选值见下方说明
+  batch_size: 100
+# recursive (默认)：递归字符切分。适合 Markdown、代码和一般文档，优先按段落、标题切分。
+
+# semantic：语义切分。根据含义来切（需要 Embedding 模型支持），不会把一个完整的意思切断。
+
+# fixed_length：固定长度切分。简单粗暴按字数切。
+  
+  # Chunk Refiner Configuration (C5)
+  chunk_refiner:
+    use_llm: false  # Set to true to enable LLM-based refinement (requires LLM config)
+    # When use_llm is false or LLM call fails, falls back to rule-based refinement
+  
+  # Metadata Enricher Configuration (C6)
+  metadata_enricher:
+    use_llm: false  # Set to true to enable LLM-based enrichment (requires LLM config)
+    # When use_llm is false or LLM call fails, falls back to rule-based enrichment

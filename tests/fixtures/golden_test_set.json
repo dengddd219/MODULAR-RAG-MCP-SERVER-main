@@ -1,0 +1,36 @@
+{
+  "description": "Minimal golden test set for Modular RAG evaluation (debug mode).",
+  "version": "1.0",
+  "test_cases": [
+    {
+      "query": "What is Modular RAG?",
+      "expected_sources": ["DEV_SPEC.pdf"],
+      "expected_chunk_ids": [],
+      "reference_answer": "Modular RAG goes beyond naive RAG by adding specialized modules like search refinement, reranking, and query transformation..."
+    },
+    {
+      "query": "How to configure Azure OpenAI?",
+      "expected_sources": ["DEV_SPEC.pdf"],
+      "expected_chunk_ids": [],
+      "reference_answer": "To configure Azure OpenAI, you need to set the API_KEY, ENDPOINT, and DEPLOYMENT_NAME in the .env file..."
+    },
+    {
+      "query": "What is hybrid search and how does it work?",
+      "expected_sources": ["DEV_SPEC.pdf"],
+      "expected_chunk_ids": [],
+      "reference_answer": "Hybrid search combines vector-based semantic search with keyword-based BM25 search to improve retrieval accuracy..."
+    },
+    {
+      "query": "Explain the chunking strategy",
+      "expected_sources": ["DEV_SPEC.pdf"],
+      "expected_chunk_ids": [],
+      "reference_answer": "The strategy involves fixed-size overlapping chunks to maintain context across boundaries..."
+    },
+    {
+      "query": "What evaluation metrics are supported?",
+      "expected_sources": ["DEV_SPEC.pdf"],
+      "expected_chunk_ids": [],
+      "reference_answer": "Supported metrics include Hit Rate, MRR (Mean Reciprocal Rank), and Faithfulness for answer generation..."
+    }
+  ]
+}
