@@ -3,7 +3,7 @@
 This module implements the main pipeline that orchestrates the complete
 document ingestion flow:
     1. File Integrity Check (SHA256 skip check)
-    2. Document Loading (PDF → Document)
+    2. Document Loading (PDF / Markdown → Document)
     3. Chunking (Document → Chunks)
     4. Transform (Refine + Enrich + Caption)
     5. Encoding (Dense + Sparse vectors)
@@ -29,6 +29,8 @@ from src.observability.logger import get_logger
 # Libs layer imports
 from src.libs.loader.file_integrity import SQLiteIntegrityChecker
 from src.libs.loader.pdf_loader import PdfLoader
+from src.libs.loader.markdown_loader import MarkdownLoader
+from src.libs.loader.base_loader import BaseLoader
 from src.libs.embedding.embedding_factory import EmbeddingFactory
 from src.libs.vector_store.vector_store_factory import VectorStoreFactory
 
@@ -143,12 +145,16 @@ class IngestionPipeline:
         self.integrity_checker = SQLiteIntegrityChecker(db_path=str(resolve_path("data/db/ingestion_history.db")))
         logger.info("  ✓ FileIntegrityChecker initialized")
         
-        # Stage 2: Loader
-        self.loader = PdfLoader(
+        # Stage 2: Loaders (by file type)
+        pdf_loader = PdfLoader(
             extract_images=True,
             image_storage_dir=str(resolve_path(f"data/images/{collection}"))
         )
-        logger.info("  ✓ PdfLoader initialized")
+        self._loaders: Dict[str, BaseLoader] = {
+            ".pdf": pdf_loader,
+            ".md": MarkdownLoader(),
+        }
+        logger.info("  ✓ Loaders initialized (PDF, Markdown)")
         
         # Stage 3: Chunker
         self.chunker = DocumentChunker(settings)
@@ -199,7 +205,17 @@ class IngestionPipeline:
         logger.info("  ✓ ImageStorage initialized")
         
         logger.info("Pipeline initialization complete!")
-    
+
+    def _get_loader(self, file_path: Path) -> BaseLoader:
+        """Return the loader for the given file based on its extension."""
+        suffix = file_path.suffix.lower()
+        if suffix not in self._loaders:
+            supported = ", ".join(sorted(self._loaders.keys()))
+            raise ValueError(
+                f"Unsupported file type: {suffix!r}. Supported: {supported}"
+            )
+        return self._loaders[suffix]
+
     def run(
         self,
         file_path: str,
@@ -264,7 +280,8 @@ class IngestionPipeline:
             _notify("load", 2)
             
             _t0 = time.monotonic()
-            document = self.loader.load(str(file_path))
+            loader = self._get_loader(file_path)
+            document = loader.load(str(file_path))
             _elapsed = (time.monotonic() - _t0) * 1000.0
             
             text_preview = document.text[:200].replace('\n', ' ') + "..." if len(document.text) > 200 else document.text

@@ -4,6 +4,7 @@ Verifies that IngestionPipeline.run() fires the optional on_progress
 callback at each pipeline stage with (stage_name, current, total).
 """
 
+from pathlib import Path
 from typing import List, Tuple
 from unittest.mock import MagicMock
 
@@ -31,10 +32,14 @@ def _make_fake_pipeline() -> object:
     fp.integrity_checker.compute_sha256.return_value = "hash123"
     fp.integrity_checker.should_skip.return_value = False
 
-    # Stage 2: loader
+    # Stage 2: loaders (pipeline selects by extension)
     fp.loader = MagicMock()
     fp.loader.load.return_value = Document(
         id="doc1", text="Hello world. " * 50, metadata={"source_path": "test.pdf", "images": []}
+    )
+    fp._loaders = {".pdf": fp.loader, ".md": fp.loader}
+    fp._get_loader = lambda file_path: fp._loaders.get(
+        Path(file_path).suffix.lower(), fp.loader
     )
 
     # Stage 3: chunker
@@ -48,6 +53,8 @@ def _make_fake_pipeline() -> object:
     # Stage 4: transforms
     fp.chunk_refiner = MagicMock()
     fp.chunk_refiner.transform.return_value = chunks
+    fp.document_intent_classifier = MagicMock()
+    fp.document_intent_classifier.classify_document_with_scores.return_value = None
     fp.metadata_enricher = MagicMock()
     fp.metadata_enricher.transform.return_value = chunks
     fp.image_captioner = MagicMock()

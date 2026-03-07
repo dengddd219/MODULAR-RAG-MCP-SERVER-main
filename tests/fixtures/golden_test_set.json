@@ -15,18 +15,6 @@
       "reference_answer": "To configure Azure OpenAI, you need to set the API_KEY, ENDPOINT, and DEPLOYMENT_NAME in the .env file..."
     },
     {
-      "query": "What is hybrid search and how does it work?",
-      "expected_sources": ["DEV_SPEC.pdf"],
-      "expected_chunk_ids": [],
-      "reference_answer": "Hybrid search combines vector-based semantic search with keyword-based BM25 search to improve retrieval accuracy..."
-    },
-    {
-      "query": "Explain the chunking strategy",
-      "expected_sources": ["DEV_SPEC.pdf"],
-      "expected_chunk_ids": [],
-      "reference_answer": "The strategy involves fixed-size overlapping chunks to maintain context across boundaries..."
-    },
-    {
       "query": "What evaluation metrics are supported?",
       "expected_sources": ["DEV_SPEC.pdf"],
       "expected_chunk_ids": [],

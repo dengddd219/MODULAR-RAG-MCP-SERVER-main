@@ -21,6 +21,9 @@ from typing import Any, Dict, List, Optional
 
 from src.libs.evaluator.base_evaluator import BaseEvaluator
 
+from src.core.response.rag_generator import RAGGenerator
+from src.core.types import RetrievalResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -320,28 +323,90 @@ class EvalRunner:
     def _generate_answer(self, query: str, chunks: List[Any]) -> str:
         """Generate an answer from retrieved chunks.
 
-        If a custom answer_generator is provided, use it.
-        Otherwise, concatenate chunk texts as a simple placeholder.
+        正确的数据流应当是：
+        1. 使用 HybridSearch 得到 retrieved_chunks（RetrievalResult 列表）
+        2. 通过 RAGGenerator 调用业务 LLM，基于这些 chunks 生成真实回答
+        3. 将该回答作为 Ragas/自定义评估的 generated_answer 输入
         """
+        # 1. 如果用户显式注入了自定义 answer_generator，则优先使用
         if self.answer_generator is not None:
             try:
                 return self.answer_generator(query, chunks)
             except Exception as exc:
-                logger.warning("Answer generation failed: %s", exc)
+                logger.warning("Custom answer generation failed: %s", exc)
 
-        # Fallback: concatenate chunk texts
-        texts = []
+        # 2. 将通用结构的 chunks 封装为 RetrievalResult，供 RAGGenerator 使用
+        retrieval_results: List[RetrievalResult] = []
+        for idx, c in enumerate(chunks):
+            if isinstance(c, RetrievalResult):
+                retrieval_results.append(c)
+                continue
+
+            text: str = ""
+            metadata: Dict[str, Any] = {}
+            chunk_id: str = str(idx)
+            score: float = 0.0
+
+            if isinstance(c, dict):
+                text = str(c.get("text") or c.get("content") or c.get("page_content") or "")
+                metadata = dict(c.get("metadata") or {})
+                chunk_id = str(c.get("chunk_id") or c.get("id") or idx)
+                if "score" in c:
+                    try:
+                        score = float(c["score"])
+                    except Exception:
+                        score = 0.0
+            else:
+                # best-effort 提取
+                if hasattr(c, "text"):
+                    text = str(getattr(c, "text"))
+                else:
+                    text = str(c)
+                if hasattr(c, "metadata"):
+                    try:
+                        metadata = dict(getattr(c, "metadata") or {})
+                    except Exception:
+                        metadata = {}
+                if hasattr(c, "chunk_id"):
+                    chunk_id = str(getattr(c, "chunk_id"))
+                elif hasattr(c, "id"):
+                    chunk_id = str(getattr(c, "id"))
+                if hasattr(c, "score"):
+                    try:
+                        score = float(getattr(c, "score"))
+                    except Exception:
+                        score = 0.0
+
+            retrieval_results.append(
+                RetrievalResult(
+                    chunk_id=chunk_id,
+                    score=score,
+                    text=text,
+                    metadata=metadata,
+                )
+            )
+
+        # 3. 使用与 Chat 相同的 RAGGenerator 生成真实回答
+        try:
+            generator = RAGGenerator.create(settings=self.settings)
+            answer = generator.generate(query=query, results=retrieval_results)
+            return answer
+        except Exception as exc:
+            logger.warning("RAGGenerator-based answer generation failed: %s", exc)
+
+        # 4. 兜底：仍保留旧逻辑，拼接少量 chunks，避免评估完全中断
+        texts: List[str] = []
         for c in chunks:
             if isinstance(c, str):
                 texts.append(c)
             elif isinstance(c, dict):
-                texts.append(c.get("text", str(c)))
+                texts.append(str(c.get("text") or c.get("content") or c.get("page_content") or c))
             elif hasattr(c, "text"):
                 texts.append(str(getattr(c, "text")))
             else:
                 texts.append(str(c))
 
-        return " ".join(texts[:5])  # first 5 chunks
+        return " ".join(texts[:3])
 
     def _get_chunk_id(self, chunk: Any) -> str:
         """Extract chunk ID from various representations."""

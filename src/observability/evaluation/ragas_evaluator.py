@@ -17,6 +17,7 @@ import logging
 import nest_asyncio
 nest_asyncio.apply()
 from typing import Any, Dict, List, Optional, Sequence
+import re
 
 from src.libs.evaluator.base_evaluator import BaseEvaluator
 
@@ -317,23 +318,55 @@ class RagasEvaluator(BaseEvaluator):
     def _extract_texts(self, chunks: List[Any]) -> List[str]:
         """Extract text strings from various chunk representations.
 
-        Args:
-            chunks: List of chunk dicts, strings, or objects with .text.
-
-        Returns:
-            List of text strings.
+        为避免裁判 LLM 的 token 爆炸，这里做两层控制：
+        1. 只取前若干 chunks（在 evaluate 里已有 max_eval_chunks 控制）
+        2. 对每个 chunk 文本按句号/换行做“句子级”截断，而不是暴力 [:N] 切字符
         """
+        MAX_CHARS_PER_CONTEXT = 1000
+
+        def _truncate_by_sentence(text: str, max_chars: int) -> str:
+            if len(text) <= max_chars:
+                return text
+
+            # 先按换行粗分段，优先保留前几段
+            parts = re.split(r"\n+", text)
+            kept_parts: List[str] = []
+            total = 0
+            for part in parts:
+                part = part.strip()
+                if not part:
+                    continue
+                # 再按句号/问号/感叹号/英文标点切分句子
+                sentences = re.split(r"(?<=[。！？.!?])\s*", part)
+                for s in sentences:
+                    s = s.strip()
+                    if not s:
+                        continue
+                    if total + len(s) > max_chars:
+                        return " ".join(kept_parts).strip()
+                    kept_parts.append(s)
+                    total += len(s) + 1  # 简单加空格
+
+            # 如果循环结束还没超过上限，就返回全部拼接结果
+            joined = " ".join(kept_parts).strip()
+            if joined:
+                return joined
+            # 兜底：即便正则没切出句子，也保底截一刀，避免空文本
+            return text[:max_chars]
+
         texts: List[str] = []
         for chunk in chunks:
             if isinstance(chunk, str):
-                texts.append(chunk)
+                raw = chunk
             elif isinstance(chunk, dict):
-                text = chunk.get("text") or chunk.get("content") or chunk.get("page_content", "")
-                texts.append(str(text))
+                raw = str(chunk.get("text") or chunk.get("content") or chunk.get("page_content") or "")
             elif hasattr(chunk, "text"):
-                texts.append(str(getattr(chunk, "text")))
+                raw = str(getattr(chunk, "text"))
             else:
-                texts.append(str(chunk))
+                raw = str(chunk)
+
+            texts.append(_truncate_by_sentence(raw, MAX_CHARS_PER_CONTEXT))
+
         return texts
 
     def _metrics_from_settings(self, settings: Any) -> List[str]:

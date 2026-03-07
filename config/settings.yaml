@@ -89,8 +89,8 @@ observability:
 # Ingestion Configuration
 # =============================================================================
 ingestion:
-  chunk_size: 1000        # <--- 参数1：这里改每个分块的大小（字符数）
-  chunk_overlap: 200      # <--- 参数2：这里改分块之间的重叠部分（防止语义切断）
+  chunk_size: 600         # <--- 参数1：这里改每个分块的大小（字符数，约 300–500 tokens）
+  chunk_overlap: 120      # <--- 参数2：这里改分块之间的重叠部分（防止语义切断）
   splitter: "recursive"   # <--- 策略：这里改切分算法。可选值见下方说明
   batch_size: 100
 # recursive (默认)：递归字符切分。适合 Markdown、代码和一般文档，优先按段落、标题切分。

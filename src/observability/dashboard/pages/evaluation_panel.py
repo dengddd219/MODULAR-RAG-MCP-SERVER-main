@@ -324,16 +324,19 @@ def _render_history() -> None:
             "No evaluation history yet. Run an evaluation to start tracking!"
         )
         return
+    # 只展示最近 10 次
+    start_idx = max(0, len(history) - 10)
 
-    # Show recent runs as a table
+    # Show recent runs as a table（新增 Change Note 列）
     rows = []
-    for entry in history[-10:]:  # last 10 runs
+    for entry in history[start_idx:]:  # last 10 runs
         rows.append(
             {
                 "Timestamp": entry.get("timestamp", "—"),
                 "Evaluator": entry.get("evaluator_name", "—"),
                 "Queries": entry.get("query_count", 0),
                 "Time (ms)": round(entry.get("total_elapsed_ms", 0)),
+                "Change Note": entry.get("note", ""),
                 **{
                     k: round(v, 4)
                     for k, v in entry.get("aggregate_metrics", {}).items()
@@ -343,6 +346,29 @@ def _render_history() -> None:
 
     st.dataframe(rows, width="stretch")
 
+    # 为每一条历史记录提供「编辑说明」的入口
+    st.markdown("**Edit change notes for individual runs:**")
+
+    for idx in range(start_idx, len(history)):
+        entry = history[idx]
+        label = f"Run #{idx + 1} · {entry.get('timestamp', '—')} · {entry.get('evaluator_name', '—')}"
+        with st.expander(label, expanded=False):
+            note_key = f"eval_note_{idx}"
+            # 初始化 SessionState 中的默认值
+            if note_key not in st.session_state:
+                st.session_state[note_key] = entry.get("note", "")
+
+            st.markdown("记录这一次代码 / 配置改动的原因，以及你对结果变化的理解：")
+            note_value = st.text_area(
+                "Change note",
+                key=note_key,
+                height=120,
+            )
+
+            if st.button("💾 Save note", key=f"save_note_{idx}"):
+                _update_history_note_at(index=idx, note=note_value)
+                st.success("Note saved for this run.")
+
 
 def _save_to_history(report: Dict[str, Any]) -> None:
     """Append an evaluation report to the history file."""
@@ -350,6 +376,8 @@ def _save_to_history(report: Dict[str, Any]) -> None:
         EVAL_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
         entry = {
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+             # 默认空说明，用户后续可在 UI 中补充
+            "note": "",
             **report,
         }
         with EVAL_HISTORY_PATH.open("a", encoding="utf-8") as f:
@@ -377,3 +405,20 @@ def _load_history() -> List[Dict[str, Any]]:
         logger.warning("Failed to load evaluation history: %s", exc)
 
     return entries
+
+
+def _update_history_note_at(index: int, note: str) -> None:
+    """Update the 'note' field for a specific history entry (by index)."""
+    history = _load_history()
+    if index < 0 or index >= len(history):
+        return
+
+    history[index]["note"] = note
+
+    try:
+        EVAL_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with EVAL_HISTORY_PATH.open("w", encoding="utf-8") as f:
+            for entry in history:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.warning("Failed to update evaluation history note: %s", exc)

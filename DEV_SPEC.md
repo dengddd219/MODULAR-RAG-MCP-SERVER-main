@@ -182,9 +182,9 @@
 
 设计要点：
 - **明确分层职责**：
-  - Loader：负责把原始文件解析为统一的 `Document` 对象（`text` + `metadata`；类型定义集中在 `src/core/types.py`）。**在当前阶段，仅实现 PDF 格式的 Loader。**
+  - Loader：负责把原始文件解析为统一的 `Document` 对象（`text` + `metadata`；类型定义集中在 `src/core/types.py`）。**当前已实现 PDF 与 Markdown（.md）两种格式的 Loader；Pipeline 按文件扩展名自动选择对应解析器。** [new3.6]
 		- 统一输出格式采用规范化 Markdown作为 `Document.text`：这样可以更好的配合后面的Splitte（Langchain RecursiveCharacterTextSplitte））方法产出高质量切块。
-		- Loader 同时抽取/补齐基础 metadata（如 `source_path`, `doc_type=pdf`, `page`, `title/heading_outline`, `images` 引用列表等），为定位、回溯与后续 Transform 提供依据。
+		- Loader 同时抽取/补齐基础 metadata（如 `source_path`, `doc_type`（`pdf` 或 `markdown` [new3.6]）, `page`, `title/heading_outline`, `images` 引用列表等），为定位、回溯与后续 Transform 提供依据。
 	- Splitter：基于 Markdown 结构（标题/段落/代码块等）与参数配置把 `Document` 切为若干 Chunk，保留原始位置与上下文引用。
 	- Transform：可插入的处理步骤（ImageCaptioning、OCR、code-block normalization、html-to-text cleanup 等），Transform 可以选择把额外信息追加到 chunk.text 或放入 chunk.metadata（推荐默认追加到 text 以保证检索覆盖）。
 	- Embed & Upsert：按批次计算 embedding，并上载到向量存储；支持向量 + metadata 上载，并提供幂等 upsert 策略（基于 id/hash）。
@@ -234,9 +234,10 @@
 	> **升级路径**：当系统规模扩展至分布式场景时，可通过统一的抽象接口将 SQLite 替换为 PostgreSQL 或 Redis，无需修改上层业务逻辑。
 	
 	- **解析与标准化**：
-		- 当前范围：**仅实现 PDF -> canonical Markdown 子集** 的转换。
+		- 当前范围：**PDF -> canonical Markdown 子集**；**原生 Markdown（.md）文件直接读取为 `Document.text`，无需转换。** [new3.6]
 	- 技术选型（Python PDF -> Markdown）：
 		- **首选：MarkItDown**（作为默认 PDF 解析/转换引擎）。优点是直接产出 Markdown 形态文本，便于与后续 `RecursiveCharacterTextSplitter` 的 separators 配合。
+		- **Markdown 文件**：实现 `MarkdownLoader`，对 `.md` 按 UTF-8 读取，产出与 PdfLoader 一致的 `Document`（`doc_type=markdown`，可选从首行 `#` 标题提取 `title`）；Pipeline 通过 `_get_loader(file_path)` 按扩展名选择 Loader。 [new3.6]
 	- 输出标准 `Document`：`id|source|text(markdown)|metadata`。metadata 至少包含 `source_path`, `doc_type`, `title/heading_outline`, `page/slide`（如适用）, `images`（图片引用列表）。
 	- Loader 不负责切分：只做“格式统一 + 结构抽取 + 引用收集”，确保切分策略可独立迭代与度量。
 
@@ -1725,7 +1726,7 @@ smart-knowledge-hub/
 | `LLMClient` | Azure OpenAI | OpenAI / Ollama / DeepSeek |
 | `VisionLLMClient` | Azure OpenAI Vision (GPT-4o) | OpenAI Vision / Ollama Vision (LLaVA) |
 | `EmbeddingClient` | OpenAI text-embedding-3 | BGE / Ollama 本地模型 |
-| `Loader` | PDF Loader（MarkItDown） | Markdown/HTML/Code Loader 等 |
+| `Loader` | PDF Loader（MarkItDown）+ Markdown Loader（.md）[new3.6] | HTML/Code Loader 等 |
 | `FileIntegrity` | SQLite (`data/db/ingestion_history.db`) | Redis（分布式）/ PostgreSQL（企业级）/ JSON文件（测试） |
 | `Splitter` | RecursiveCharacterTextSplitter | Semantic / FixedLen |
 | `VectorStore` | Chroma | Qdrant / Pinecone / Milvus |
@@ -1759,7 +1760,7 @@ smart-knowledge-hub/
 #### 5.4.1 离线数据摄取流 (Ingestion Flow)
 
 ```
-原始文档 (PDF)
+原始文档 (PDF / Markdown .md) [new3.6]
       │
       ▼
 ┌─────────────────┐     未变更则跳过
@@ -1769,8 +1770,8 @@ smart-knowledge-hub/
          │ 新文件/已变更
          ▼
 ┌─────────────────┐
-│     Loader      │  PDF → Markdown + 图片提取 + 元数据收集
-│   (MarkItDown)  │
+│     Loader      │  按扩展名选择：.pdf→PdfLoader / .md→MarkdownLoader [new3.6]
+│ (Pdf / MD)      │
 └────────┬────────┘
          │ Document (text + metadata.images)
          ▼
@@ -1971,7 +1972,7 @@ dashboard:
 
 
 1. **新增 LLM Provider**：实现 `BaseLLM` 接口，在 `llm_factory.py` 注册，配置文件指定 `provider` 即可
-2. **新增文档格式**：实现 `BaseLoader` 接口，在 Pipeline 中注册对应文件扩展名的处理器
+2. **新增文档格式**：实现 `BaseLoader` 接口，在 Pipeline 的 `_loaders` 中注册对应文件扩展名的处理器；当前已支持 `.pdf`（PdfLoader）与 `.md`（MarkdownLoader），通过 `_get_loader(file_path)` 按扩展名分发。 [new3.6]
 3. **新增检索策略**：实现检索接口，在 `hybrid_search.py` 中组合调用
 4. **新增评估指标**：实现 `BaseEvaluator` 接口，在配置中添加到 `backends` 列表
 
@@ -2064,6 +2065,7 @@ dashboard:
 | C14 | Pipeline 编排（MVP 串起来） | [x] | 2026-02-02 | 完整流程编排+Azure LLM/Embedding集成测试通过 |
 | C15 | 脚本入口 ingest.py | [x] | 2026-02-02 | CLI脚本+E2E测试+文件发现+skip功能 |
 | C16 | 文档级意图分类与意图文件库视图 [新增] | [x] | 2026-03-05 | `document_intent_classifier` 为文档打 `doc_intent` 标签，[新增] 返回意图预测置信度与完整类别概率分布；Dashboard 侧在用户确认最终标签后，将原始文件同步到 `data/documents_by_intent/{intent}/{collection}/` |
+| C17 | Markdown Loader 与 Pipeline 按扩展名选择 Loader [new3.6] | [x] | 2026-03-07 | `MarkdownLoader` 支持 .md 文件；Pipeline 使用 `_loaders` + `_get_loader(file_path)` 按扩展名分发；`tests/unit/test_markdown_loader.py` 与 pipeline 进度测试更新 |
 
 #### 阶段 D：Retrieval MVP
 
