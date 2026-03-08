@@ -35,11 +35,11 @@ class StrategyMetrics:
     success_rate: float
     avg_latency_s: float
     p95_latency_s: float
-    avg_eval_time_s: float = 0.0
     avg_tokens_per_query: float
     avg_cost_per_query: float
     total_cost: float
     avg_quality_score: float
+    avg_eval_time_s: float = 0.0
     routing_total_accuracy: Optional[float] = None
     routing_simple_accuracy: Optional[float] = None
     routing_complex_accuracy: Optional[float] = None

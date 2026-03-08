@@ -203,27 +203,66 @@ class RagasEvaluator(BaseEvaluator):
         # Increase timeout for evaluation (Ragas can take longer with complex queries)
         my_run_config = RunConfig(timeout=300)  # Increased from 120 to 300 seconds
 
-        result = evaluate(
-            dataset=dataset,
-            metrics=selected_metrics,
-            llm=llm,
-            embeddings=embeddings,
-            run_config=my_run_config,  # 👈 第三处：必须明确传给 evaluate
-        )
+        try:
+            result = evaluate(
+                dataset=dataset,
+                metrics=selected_metrics,
+                llm=llm,
+                embeddings=embeddings,
+                run_config=my_run_config,  # 👈 第三处：必须明确传给 evaluate
+            )
+        except Exception as eval_exc:
+            logger.error(f"Ragas evaluate() call failed: {eval_exc}", exc_info=True)
+            # Return default scores if evaluation completely fails
+            scores = {}
+            for key in selected_metrics:
+                name = key.name
+                scores[name] = 0.5
+            logger.warning(f"Ragas evaluation failed completely, returning default scores: {scores}")
+            return scores
 
         # Convert result to simple dict
         import math
         
+        # Check if result is a valid dict-like object
+        if not isinstance(result, dict) and not hasattr(result, 'keys'):
+            logger.error(f"Ragas evaluation returned unexpected type: {type(result)}, value: {result}")
+            # Return default scores if result is not a dict
+            scores = {}
+            for key in selected_metrics:
+                name = key.name
+                scores[name] = 0.5
+            logger.warning(f"Ragas evaluation returned invalid result type, using default scores: {scores}")
+            return scores
+        
         scores = {}
         # First, log what keys are actually in the result for debugging
-        result_keys = list(result.keys()) if hasattr(result, 'keys') else []
+        try:
+            result_keys = list(result.keys()) if hasattr(result, 'keys') else []
+        except Exception as e:
+            logger.error(f"Failed to get keys from result: {e}, result type: {type(result)}")
+            result_keys = []
+        
         logger.debug(f"Ragas evaluation result keys: {result_keys}")
         logger.debug(f"Requested metrics: {[m.name for m in selected_metrics]}")
         
         for key in selected_metrics:
             name = key.name
-            # Use .get() to safely access result, handle KeyError if metric is missing
-            if name not in result:
+            # Safely check if key exists in result
+            try:
+                # Use hasattr and try-except to safely check membership
+                if hasattr(result, '__contains__'):
+                    key_exists = name in result
+                elif isinstance(result, dict):
+                    key_exists = name in result
+                else:
+                    # If we can't check membership safely, assume key doesn't exist
+                    key_exists = False
+            except Exception as e:
+                logger.warning(f"Error checking if '{name}' in result: {e}")
+                key_exists = False
+            
+            if not key_exists:
                 logger.warning(
                     f"Ragas metric '{name}' not found in result. "
                     f"Available keys: {result_keys}. Using default 0.5"

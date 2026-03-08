@@ -637,14 +637,14 @@ def render() -> None:
             
             # Display elapsed time (small, subtle)
             st.caption(f"⏱️ 运行时间: {elapsed_time:.2f}秒")
-                
-                # Display LLM-generated answer
-                st.markdown(result["content"])
-                if result["citations"]:
-                    with st.expander(
-                        f"📚 引用来源（{len(result['citations'])}）",
-                        expanded=False,
-                    ):
+            
+            # Display LLM-generated answer
+            st.markdown(result["content"])
+            if result["citations"]:
+                with st.expander(
+                    f"📚 引用来源（{len(result['citations'])}）",
+                    expanded=False,
+                ):
                         for citation in result["citations"]:
                             if isinstance(citation, dict):
                                 c_idx = citation.get("index", 0)
