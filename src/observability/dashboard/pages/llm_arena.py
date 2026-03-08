@@ -17,34 +17,10 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
-
-
-def _safe_progress(value: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
-    """Safely convert a value to a progress bar value in [0.0, 1.0].
-    
-    Args:
-        value: The value to convert (can be NaN, inf, or any number).
-        min_val: Minimum value for normalization (default: 0.0).
-        max_val: Maximum value for normalization (default: 1.0).
-    
-    Returns:
-        A float in [0.0, 1.0] range, safe for st.progress().
-    """
-    # Handle NaN and inf
-    if not isinstance(value, (int, float)) or math.isnan(value) or math.isinf(value):
-        return 0.0
-    
-    # Normalize to [0.0, 1.0] range
-    if max_val > min_val:
-        normalized = (value - min_val) / (max_val - min_val)
-        return max(0.0, min(1.0, normalized))
-    else:
-        # If max_val <= min_val, just clamp to [0.0, 1.0]
-        return max(0.0, min(1.0, value))
 
 from src.core.query_engine.hybrid_search import create_hybrid_search
 from src.core.query_engine.query_processor import QueryProcessor
@@ -70,8 +46,36 @@ from src.observability.evaluation.ragas_evaluator import RagasEvaluator
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_progress(value: float, min_val: float = 0.0, max_val: float = 1.0) -> float:
+    """Safely convert a value to a progress bar value in [0.0, 1.0].
+    
+    Args:
+        value: The value to convert (can be NaN, inf, or any number).
+        min_val: Minimum value for normalization (default: 0.0).
+        max_val: Maximum value for normalization (default: 1.0).
+    
+    Returns:
+        A float in [0.0, 1.0] range, safe for st.progress().
+    """
+    # Handle NaN and inf
+    if not isinstance(value, (int, float)) or math.isnan(value) or math.isinf(value):
+        return 0.0
+    
+    # Normalize to [0.0, 1.0] range
+    if max_val > min_val:
+        normalized = (value - min_val) / (max_val - min_val)
+        return max(0.0, min(1.0, normalized))
+    else:
+        # If max_val <= min_val, just clamp to [0.0, 1.0]
+        return max(0.0, min(1.0, value))
+
 # Default golden test set for model evaluation
 DEFAULT_GOLDEN_SET = Path("tests/fixtures/golden_test_set_model_evaluation_and_selection.json")
+
+# Benchmark progress save path
+BENCHMARK_PROGRESS_DIR = Path("logs")
+BENCHMARK_PROGRESS_FILE = BENCHMARK_PROGRESS_DIR / "benchmark_progress.json"
 
 # Model tier definitions
 # Tier 2: Local SLM models (Ollama)
@@ -839,7 +843,7 @@ def _evaluate_playground_answer(
         with st.spinner("运行 Ragas 评测中..."):
             metrics = evaluator.evaluate(
                 query=query,
-                retrieved_chunks=chunks,
+                retrieved_chunks=retrieved_chunks,
                 generated_answer=answer,
             )
         
@@ -866,7 +870,13 @@ def _evaluate_playground_answer(
 def _render_exhaustive_benchmark() -> None:
     """Render Module B: Exhaustive Benchmark."""
     st.subheader("📊 Exhaustive Benchmark (批量压测与排行榜)")
-    st.markdown("跑完测试集，采用两两匹配穷举法找出最优组合。")
+    st.markdown(
+        "跑完测试集，采用两两匹配穷举法找出最优组合。\n\n"
+        "**工作原理**：系统会自动生成所有模型的两两组合，并根据测试集中的 `expected_complexity` 标签自动路由：\n"
+        "- 简单询问（simple）→ 使用本地小模型\n"
+        "- 复杂询问（complex）→ 使用 API 大模型\n\n"
+        "您只需要点击开始，系统会自动运行所有组合并实时更新排行榜。"
+    )
     
     # Test set file uploader
     test_set_path = st.text_input(
@@ -885,59 +895,77 @@ def _render_exhaustive_benchmark() -> None:
         with open(test_set_file, "r", encoding="utf-8") as f:
             test_data = json.load(f)
         test_cases = test_data.get("test_cases", [])
-        st.info(f"已加载 {len(test_cases)} 个测试用例")
+        
+        # Count simple and complex queries
+        simple_count = sum(1 for tc in test_cases if tc.get("expected_complexity", "").lower() == "simple")
+        complex_count = sum(1 for tc in test_cases if tc.get("expected_complexity", "").lower() == "complex")
+        
+        st.info(
+            f"已加载 {len(test_cases)} 个测试用例 "
+            f"（简单: {simple_count}, 复杂: {complex_count}）"
+        )
     except Exception as e:
         st.error(f"加载测试集失败: {e}")
         return
     
-    # Strategy selection
-    st.markdown("#### 选择参赛选手")
-    
+    # Show available models info
     all_models = _get_all_models()
     tier2_models = _get_tier2_models()
     tier3_models = _get_tier3_models()
+    
+    if not tier2_models or not tier3_models:
+        st.warning("⚠️ 需要至少一个本地小模型和一个 API 大模型才能运行双模型组合策略。")
+        if not tier2_models:
+            st.info("💡 提示：请确保已注册本地小模型（Tier 2）。")
+        if not tier3_models:
+            st.info("💡 提示：请确保已注册 API 大模型（Tier 3）。")
+        return
     
     # Get benchmark model ID
     settings = load_settings()
     benchmark_id = st.session_state.get("benchmark_model_id", _get_benchmark_model_id(settings))
     
-    # Single model strategies with benchmark marker
-    single_model_options = []
+    # Display model combinations that will be tested
+    st.markdown("#### 📋 将测试的组合")
+    
+    # Find benchmark model
+    benchmark_model = None
     for m in all_models:
-        display_name = m.display_name
         if m.model_id == benchmark_id:
-            display_name = f"{display_name} [Benchmark]"
-        single_model_options.append(display_name)
+            benchmark_model = m
+            break
     
-    selected_single = st.multiselect(
-        "单模型策略",
-        options=single_model_options,
-        default=[],
-        key="benchmark_single",
+    # Calculate total combinations
+    # Single model strategies: ONLY Benchmark model
+    single_count = 1 if benchmark_model else 0
+    # Hybrid strategies: all tier2 × tier3 combinations
+    hybrid_count = len(tier2_models) * len(tier3_models)
+    total_combinations = single_count + hybrid_count
+    total_tasks = total_combinations * len(test_cases)
+    
+    st.info(
+        f"将测试 **{total_combinations}** 个组合（单模型基准: {single_count}, 双模型组合: {hybrid_count}），"
+        f"共 **{total_tasks}** 个任务"
     )
     
-    # Hybrid strategies (combinations) with benchmark marker
-    hybrid_options = []
-    for small in tier2_models:
-        for large in tier3_models:
-            small_name = small.display_name
-            large_name = large.display_name
-            if small.model_id == benchmark_id:
-                small_name = f"{small_name} [Benchmark]"
-            if large.model_id == benchmark_id:
-                large_name = f"{large_name} [Benchmark]"
-            hybrid_options.append(f"{small_name} + {large_name}")
-    
-    selected_hybrid = st.multiselect(
-        "双模型组合策略",
-        options=hybrid_options,
-        default=[],
-        key="benchmark_hybrid",
-    )
-    
-    if not selected_single and not selected_hybrid:
-        st.info("请至少选择一个策略进行测试。")
-        return
+    # Show preview of combinations
+    with st.expander("查看所有组合详情", expanded=False):
+        st.markdown("**单模型策略（基准对比）：**")
+        if benchmark_model:
+            st.text(f"  • {benchmark_model.display_name} [Benchmark]")
+        else:
+            st.text("  • 未找到基准模型")
+        
+        st.markdown("**双模型组合策略：**")
+        for small in tier2_models:
+            for large in tier3_models:
+                small_name = small.display_name
+                large_name = large.display_name
+                if small.model_id == benchmark_id:
+                    small_name = f"{small_name} [Benchmark]"
+                if large.model_id == benchmark_id:
+                    large_name = f"{large_name} [Benchmark]"
+                st.text(f"  • {small_name} + {large_name}")
     
     # Performance optimization option
     st.markdown("#### ⚡ 性能优化")
@@ -958,28 +986,109 @@ def _render_exhaustive_benchmark() -> None:
     if fast_mode:
         st.info("⚡ 加速模式已启用：将使用性能优化设置，评估速度提升 60-70%")
     
-    # Run benchmark button
-    if st.button("▶️ 开始压测", type="primary", key="benchmark_run"):
-        _run_benchmark(
-            test_cases=test_cases,
-            single_strategies=selected_single,
-            hybrid_strategies=selected_hybrid,
-            fast_mode=fast_mode,
-        )
+    # Progress saving information
+    st.markdown("#### 💾 进度保存")
+    st.info(
+        f"✅ **自动保存功能已启用**\n\n"
+        f"进度会自动保存到: `{BENCHMARK_PROGRESS_FILE}`\n\n"
+        f"**重要提示**：\n"
+        f"- ✅ 刷新网页**不会**清除进度（进度保存在文件中）\n"
+        f"- ✅ 关闭浏览器**不会**清除进度\n"
+        f"- ✅ 每次测试用例完成后都会自动保存\n"
+        f"- ✅ 可以随时中断，稍后继续\n"
+        f"- ⚠️ 只有点击「清除进度」按钮才会删除保存的进度"
+    )
+    
+    # Check for saved progress
+    saved_progress = _load_benchmark_progress()
+    resume_available = False
+    
+    if saved_progress:
+        # Check if saved progress matches current test set
+        saved_test_set = saved_progress.get("test_set_path", "")
+        current_test_set = str(test_set_file.resolve())
+        
+        if saved_test_set == current_test_set or Path(saved_test_set) == test_set_file:
+            resume_available = True
+            completed_count = len(saved_progress.get("completed_strategies", []))
+            total_count = saved_progress.get("total_strategies", 0)
+            saved_timestamp = saved_progress.get("timestamp", 0)
+            saved_time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(saved_timestamp))
+            
+            # Calculate detailed progress
+            total_queries_completed = sum(
+                len(strategy_data.get("results", []))
+                for strategy_data in saved_progress.get("completed_strategies", [])
+            )
+            total_queries_expected = total_count * len(test_cases)
+            
+            st.markdown("#### 📊 已保存的进度")
+            st.success(
+                f"**发现已保存的进度**（保存时间: {saved_time_str}）\n\n"
+                f"📈 **完成情况**：\n"
+                f"- 已完成策略: {completed_count}/{total_count}\n"
+                f"- 已完成查询: {total_queries_completed}/{total_queries_expected}\n"
+                f"- 测试集: `{Path(saved_test_set).name}`\n\n"
+                f"💡 **提示**：点击「继续压测」将从上次中断的地方继续，不会重复已完成的测试。"
+            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("▶️ 继续压测", type="primary", key="benchmark_resume"):
+                    _run_benchmark(
+                        test_cases=test_cases,
+                        fast_mode=fast_mode,
+                        test_set_path=str(test_set_file.resolve()),
+                        resume_from_progress=saved_progress,
+                    )
+            with col2:
+                if st.button("🗑️ 清除进度并重新开始", key="benchmark_clear"):
+                    _clear_benchmark_progress()
+                    st.success("✅ 进度已清除")
+                    st.rerun()
+        else:
+            st.warning(
+                f"⚠️ **已保存的进度来自不同的测试集**：\n\n"
+                f"- 已保存: `{Path(saved_test_set).name}`\n"
+                f"- 当前: `{Path(current_test_set).name}`\n\n"
+                f"💡 **提示**：如需继续之前的进度，请选择对应的测试集文件。"
+            )
+            if st.button("🗑️ 清除旧进度", key="benchmark_clear_old"):
+                _clear_benchmark_progress()
+                st.success("✅ 旧进度已清除")
+                st.rerun()
+    else:
+        st.info("ℹ️ 当前没有保存的进度。开始压测后，进度会自动保存。")
+    
+    # Run benchmark button (only show if no resume available)
+    if not resume_available:
+        if st.button("▶️ 开始压测", type="primary", key="benchmark_run"):
+            _run_benchmark(
+                test_cases=test_cases,
+                fast_mode=fast_mode,
+                test_set_path=str(test_set_file.resolve()),
+                resume_from_progress=None,
+            )
 
 
 def _run_benchmark(
     test_cases: List[Dict[str, Any]],
-    single_strategies: List[str],
-    hybrid_strategies: List[str],
     fast_mode: bool = False,
+    test_set_path: str = "",
+    resume_from_progress: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Run exhaustive benchmark on test cases.
     
+    Automatically generates all model combinations:
+    - Single model strategies: all registered models
+    - Hybrid strategies: all Tier 2 (small) × Tier 3 (large) combinations
+    
+    For hybrid strategies, uses expected_complexity from test cases to route:
+    - simple → small model
+    - complex → large model
+    
     Args:
         test_cases: List of test case dictionaries.
-        single_strategies: List of single model strategy names.
-        hybrid_strategies: List of hybrid strategy names.
         fast_mode: If True, enables performance optimizations for Ragas evaluation.
     """
     try:
@@ -989,76 +1098,276 @@ def _run_benchmark(
         ragas_evaluator = RagasEvaluator(settings=settings, fast_mode=fast_mode)
         scoring_engine = ScoringEngine()
         
-        # Collect all strategies
+        # Get all models
+        all_models = _get_all_models()
+        tier2_models = _get_tier2_models()
+        tier3_models = _get_tier3_models()
+        
+        # Get benchmark model ID
+        benchmark_id = st.session_state.get("benchmark_model_id", _get_benchmark_model_id(settings))
+        
+        # Collect all strategies automatically
         all_strategies: List[Tuple[str, Optional[str], str]] = []
         
-        # Add single model strategies (remove [Benchmark] marker)
-        for model_name in single_strategies:
-            clean_name = model_name.replace(" [Benchmark]", "")
-            all_strategies.append((model_name, None, clean_name))  # Keep original for display
+        # Add single model strategies - ONLY Benchmark model
+        benchmark_model = None
+        for m in all_models:
+            if m.model_id == benchmark_id:
+                benchmark_model = m
+                break
         
-        # Add hybrid strategies (remove [Benchmark] marker)
-        for hybrid in hybrid_strategies:
-            parts = hybrid.split(" + ")
-            if len(parts) == 2:
-                small_clean = parts[0].replace(" [Benchmark]", "")
-                large_clean = parts[1].replace(" [Benchmark]", "")
-                all_strategies.append((hybrid, small_clean, large_clean))  # Keep original for display
+        if benchmark_model:
+            display_name = f"{benchmark_model.display_name} [Benchmark]"
+            all_strategies.append((display_name, None, benchmark_model.display_name))
+        
+        # Add hybrid strategies (all combinations)
+        for small in tier2_models:
+            for large in tier3_models:
+                small_name = small.display_name
+                large_name = large.display_name
+                if small.model_id == benchmark_id:
+                    small_name = f"{small_name} [Benchmark]"
+                if large.model_id == benchmark_id:
+                    large_name = f"{large_name} [Benchmark]"
+                strategy_name = f"{small_name} + {large_name}"
+                all_strategies.append((strategy_name, small.display_name, large.display_name))
         
         if not all_strategies:
-            st.warning("没有选择任何策略。")
+            st.warning("没有可用的模型组合。")
             return
         
-        # Progress bar
+        # Load saved progress if resuming
+        strategy_results: Dict[str, List[Dict[str, Any]]] = {}
+        completed_strategy_names: set = set()
+        
+        if resume_from_progress:
+            # Restore completed results
+            completed_strategies = resume_from_progress.get("completed_strategies", [])
+            for strategy_data in completed_strategies:
+                strategy_name = strategy_data.get("strategy_name", "")
+                results = strategy_data.get("results", [])
+                if strategy_name and results:
+                    strategy_results[strategy_name] = results
+                    completed_strategy_names.add(strategy_name)
+            
+            completed_count = len(completed_strategy_names)
+            st.success(
+                f"✅ 已恢复进度：{completed_count}/{len(all_strategies)} 个策略已完成，"
+                f"将从中断处继续..."
+            )
+        
+        # Progress bar and status
         progress_bar = st.progress(0)
         status_text = st.empty()
+        stage_text = st.empty()
         
-        # Results storage
-        strategy_results: Dict[str, List[Dict[str, Any]]] = {}
+        # Leaderboard placeholder (will be updated dynamically)
+        leaderboard_placeholder = st.empty()
         
+        # Calculate total tasks (excluding already completed)
         total_tasks = len(all_strategies) * len(test_cases)
-        current_task = 0
+        completed_tasks = sum(
+            len(results) for results in strategy_results.values()
+        )
+        current_task = completed_tasks
         
         # Run each strategy
-        for strategy_name, small_model, large_model in all_strategies:
-            strategy_results[strategy_name] = []
+        for strategy_idx, (strategy_name, small_model, large_model) in enumerate(all_strategies, 1):
+            # Skip if this strategy is already completed
+            if strategy_name in completed_strategy_names:
+                # Verify we have all test cases for this strategy
+                existing_results = strategy_results.get(strategy_name, [])
+                if len(existing_results) >= len(test_cases):
+                    logger.info(f"Skipping completed strategy: {strategy_name}")
+                    continue
+                else:
+                    # Partial completion - continue from where we left off
+                    logger.info(f"Resuming partial strategy: {strategy_name} ({len(existing_results)}/{len(test_cases)} completed)")
+                    # Get completed query IDs to skip
+                    completed_query_ids = {
+                        r.get("query_id") or r.get("query", "")
+                        for r in existing_results
+                    }
+            else:
+                # New strategy - start fresh
+                strategy_results[strategy_name] = []
+                completed_query_ids = set()
             
-            for test_case in test_cases:
+            for test_case_idx, test_case in enumerate(test_cases, 1):
+                query_id = test_case.get("query_id", f"Q{test_case_idx}")
+                query = test_case.get("query", "")
+                
+                # Skip if this test case is already completed for this strategy
+                if query_id in completed_query_ids or query in completed_query_ids:
+                    logger.debug(f"Skipping completed test case: {strategy_name} - {query_id}")
+                    continue
                 current_task += 1
                 progress = current_task / total_tasks
                 progress_bar.progress(progress)
-                status_text.text(
-                    f"运行策略: {strategy_name} | "
-                    f"测试用例: {test_case.get('query_id', 'unknown')} "
-                    f"({current_task}/{total_tasks})"
-                )
                 
-                query = test_case.get("query", "")
                 expected_complexity = test_case.get("expected_complexity", "simple")
                 
-                # Execute query
-                result = _execute_benchmark_query(
-                    query=query,
-                    strategy_name=strategy_name,
-                    small_model=small_model,
-                    large_model=large_model,
-                    manager=manager,
-                    evaluator=evaluator,
-                    ragas_evaluator=ragas_evaluator,
-                    settings=settings,
-                    expected_complexity=expected_complexity,
+                # Determine which model will be used
+                if small_model is not None:
+                    # Hybrid strategy
+                    if expected_complexity.lower() == "simple":
+                        used_model = small_model
+                    else:
+                        used_model = large_model
+                    model_info = f"{small_model} + {large_model} → 使用: {used_model}"
+                else:
+                    # Single model strategy
+                    used_model = large_model
+                    model_info = used_model
+                
+                # Update status with detailed information
+                status_text.markdown(
+                    f"**当前进度**: {current_task}/{total_tasks} "
+                    f"({progress*100:.1f}%)\n\n"
+                    f"**当前组合**: {strategy_name}\n"
+                    f"**模型选择**: {model_info}\n"
+                    f"**当前问题**: {query_id} ({expected_complexity})"
                 )
                 
-                strategy_results[strategy_name].append(result)
+                # Execute query with error handling
+                try:
+                    # Update stage: Answer Generation
+                    stage_text.info("🔄 **阶段**: 回答生成中...")
+                    
+                    result = _execute_benchmark_query(
+                        query=query,
+                        strategy_name=strategy_name,
+                        small_model=small_model,
+                        large_model=large_model,
+                        manager=manager,
+                        evaluator=evaluator,
+                        ragas_evaluator=ragas_evaluator,
+                        settings=settings,
+                        expected_complexity=expected_complexity,
+                        status_callback=lambda stage: stage_text.info(f"🔄 **阶段**: {stage}"),
+                    )
+                    # Add query_id to result for matching during resume
+                    result["query_id"] = query_id
+                    strategy_results[strategy_name].append(result)
+                    stage_text.empty()  # Clear stage text after completion
+                    
+                    # Save progress after each test case
+                    _save_benchmark_progress(
+                        strategy_results=strategy_results,
+                        test_cases=test_cases,
+                        all_strategies=all_strategies,
+                        fast_mode=fast_mode,
+                        test_set_path=test_set_path,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to execute query for strategy {strategy_name}: {e}", exc_info=True)
+                    stage_text.empty()
+                    # Add failed result
+                    strategy_results[strategy_name].append({
+                        "query": query,
+                        "query_id": query_id,
+                        "success": False,
+                        "error": str(e),
+                        "latency_s": 0.0,
+                        "tokens": 0,
+                        "cost": 0.0,
+                        "quality_score": 50.0,
+                        "expected_complexity": expected_complexity,
+                    })
+                    
+                    # Save progress even on error
+                    _save_benchmark_progress(
+                        strategy_results=strategy_results,
+                        test_cases=test_cases,
+                        all_strategies=all_strategies,
+                        fast_mode=fast_mode,
+                        test_set_path=test_set_path,
+                    )
+            
+            # After completing all test cases for this strategy, update leaderboard
+            # Compute aggregated metrics for completed strategies
+            try:
+                completed_metrics = _compute_aggregated_metrics(strategy_results, test_cases)
+                
+                # Log strategy completion
+                logger.info(
+                    f"Strategy '{strategy_name}' completed: "
+                    f"{len(strategy_results[strategy_name])} test cases, "
+                    f"{len([r for r in strategy_results[strategy_name] if r.get('success')])} successful"
+                )
+                
+                # Display/update leaderboard dynamically
+                with leaderboard_placeholder.container():
+                    completed_count = len([s for s in strategy_results.keys() if strategy_results[s]])
+                    
+                    # Calculate summary statistics
+                    total_queries = sum(len(results) for results in strategy_results.values())
+                    successful_queries = sum(
+                        len([r for r in results if r.get("success", False)])
+                        for results in strategy_results.values()
+                    )
+                    
+                    # Display summary
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("已完成策略", f"{completed_count}/{len(all_strategies)}")
+                    with col2:
+                        st.metric("成功查询", f"{successful_queries}/{total_queries}")
+                    with col3:
+                        success_rate = (successful_queries / total_queries * 100) if total_queries > 0 else 0
+                        st.metric("成功率", f"{success_rate:.1f}%")
+                    
+                    if completed_metrics:
+                        _display_leaderboard(completed_metrics, scoring_engine)
+                    else:
+                        st.info("⏳ 等待更多测试结果...")
+            except Exception as e:
+                logger.error(f"Failed to update leaderboard: {e}", exc_info=True)
+                # Show error but continue
+                with leaderboard_placeholder.container():
+                    st.warning(f"⚠️ 更新排行榜时出错: {e}")
+                # Continue anyway, will update at the end
         
         progress_bar.progress(1.0)
-        status_text.text("✅ 压测完成！")
+        status_text.markdown("✅ **压测完成！**")
+        stage_text.empty()
         
-        # Compute aggregated metrics
-        all_metrics = _compute_aggregated_metrics(strategy_results, test_cases)
+        # Final leaderboard update (should be same as last update, but ensure it's displayed)
+        try:
+            final_metrics = _compute_aggregated_metrics(strategy_results, test_cases)
+            
+            # Log final summary
+            total_results = sum(len(results) for results in strategy_results.values())
+            total_successful = sum(
+                len([r for r in results if r.get("success", False)])
+                for results in strategy_results.values()
+            )
+            logger.info(
+                f"Benchmark completed: {total_successful}/{total_results} successful queries, "
+                f"{len(final_metrics)} strategies with metrics"
+            )
+            
+            with leaderboard_placeholder.container():
+                st.caption(f"📊 已完成 {len(all_strategies)}/{len(all_strategies)} 个策略的测试")
+                if final_metrics:
+                    _display_leaderboard(final_metrics, scoring_engine)
+                else:
+                    st.warning("⚠️ 没有可显示的评估结果。请检查日志以了解详情。")
+        except Exception as e:
+            logger.error(f"Failed to display final leaderboard: {e}", exc_info=True)
+            st.error(f"显示最终排行榜失败: {e}")
         
-        # Display leaderboard
-        _display_leaderboard(all_metrics, scoring_engine)
+        # Save final progress
+        _save_benchmark_progress(
+            strategy_results=strategy_results,
+            test_cases=test_cases,
+            all_strategies=all_strategies,
+            fast_mode=fast_mode,
+            test_set_path=test_set_path,
+        )
+        
+        # Optionally clear progress after completion (user can choose to keep it)
+        st.info("💾 进度已保存。如需清除进度文件，请刷新页面后点击「清除进度」按钮。")
     
     except Exception as e:
         logger.exception("Benchmark execution failed")
@@ -1075,12 +1384,17 @@ def _execute_benchmark_query(
     ragas_evaluator: RagasEvaluator,
     settings: Any,
     expected_complexity: str,
+    status_callback: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """Execute a single query in benchmark mode using complete RAG pipeline.
     
     For hybrid strategies, uses expected_complexity from golden_test_set_model_evaluation_and_selection.json
     to determine which model to use (small_model for simple, large_model for complex).
     No prediction is performed - uses ground truth labels from test data.
+    
+    Args:
+        status_callback: Optional callback function to update status (e.g., stage information).
+                        Called with stage description string.
     """
     result: Dict[str, Any] = {
         "query": query,
@@ -1127,6 +1441,10 @@ def _execute_benchmark_query(
             model_name=config.model_name,
             query=query,
         ) as metrics:
+            # Update stage: Answer Generation
+            if status_callback:
+                status_callback("回答生成中...")
+            
             # Execute complete RAG pipeline
             start_time = time.monotonic()
             answer, retrieved_chunks, trace = _execute_rag_query(
@@ -1153,34 +1471,79 @@ def _execute_benchmark_query(
         
         # Evaluate quality using Ragas with actual retrieved chunks
         eval_time = 0.0
+        quality_metrics = {}
         try:
-            eval_start_time = time.monotonic()
-            quality_metrics = ragas_evaluator.evaluate(
-                query=query,
-                retrieved_chunks=retrieved_chunks,
-                generated_answer=answer,
-            )
-            eval_time = time.monotonic() - eval_start_time
-            # Average of all metrics
-            quality_scores = [v for v in quality_metrics.values() if isinstance(v, (int, float))]
-            result["quality_score"] = (
-                sum(quality_scores) / len(quality_scores) * 100.0
-                if quality_scores
-                else 50.0
-            )
-        except Exception:
+            # Update stage: RAGAS Evaluation
+            if status_callback:
+                status_callback("RAGAS 评估中...")
+            
+            # Check if we have valid retrieved chunks
+            if not retrieved_chunks:
+                logger.warning(f"No retrieved chunks for query, using default quality score")
+                result["quality_score"] = 50.0
+                result["eval_error"] = "No retrieved chunks"
+            else:
+                eval_start_time = time.monotonic()
+                quality_metrics = ragas_evaluator.evaluate(
+                    query=query,
+                    retrieved_chunks=retrieved_chunks,
+                    generated_answer=answer,
+                )
+                eval_time = time.monotonic() - eval_start_time
+                
+                # Log the raw metrics for debugging
+                logger.info(f"Ragas metrics for query: {quality_metrics}")
+                
+                # Average of all metrics
+                quality_scores = [
+                    v for v in quality_metrics.values() 
+                    if isinstance(v, (int, float)) and not math.isnan(v) and not math.isinf(v)
+                ]
+                if quality_scores:
+                    result["quality_score"] = sum(quality_scores) / len(quality_scores) * 100.0
+                    result["ragas_metrics"] = quality_metrics  # Store raw metrics for debugging
+                else:
+                    logger.warning(f"No valid quality scores extracted, using default")
+                    result["quality_score"] = 50.0
+                    result["eval_error"] = "No valid scores from Ragas"
+                    result["ragas_metrics"] = quality_metrics  # Store even if invalid
+        except Exception as eval_exc:
+            logger.error(f"Ragas evaluation failed for query: {eval_exc}", exc_info=True)
             result["quality_score"] = 50.0  # Default fallback
+            result["eval_error"] = str(eval_exc)
+            result["ragas_metrics"] = {}
         
-        # Fill result
+        # Fill result with all metrics
         result["success"] = True
         result["latency_s"] = elapsed  # Generation time
         result["eval_time_s"] = eval_time  # Evaluation time
         result["tokens"] = metrics.total_tokens
         result["cost"] = metrics.calculate_cost()
+        result["answer_length"] = len(answer) if answer else 0
+        result["retrieved_chunks_count"] = len(retrieved_chunks) if retrieved_chunks else 0
+        
+        # Log successful completion
+        logger.info(
+            f"Benchmark query completed: strategy={strategy_name}, "
+            f"quality_score={result.get('quality_score', 0):.2f}, "
+            f"latency={elapsed:.2f}s, tokens={metrics.total_tokens}"
+        )
     
     except Exception as e:
-        logger.warning(f"Benchmark query failed: {e}")
+        logger.error(f"Benchmark query failed for strategy {strategy_name}: {e}", exc_info=True)
         result["error"] = str(e)
+        result["success"] = False
+        # Ensure all required fields are present even on error
+        if "latency_s" not in result:
+            result["latency_s"] = 0.0
+        if "eval_time_s" not in result:
+            result["eval_time_s"] = 0.0
+        if "tokens" not in result:
+            result["tokens"] = 0
+        if "cost" not in result:
+            result["cost"] = 0.0
+        if "quality_score" not in result:
+            result["quality_score"] = 50.0
     
     return result
 
@@ -1286,11 +1649,14 @@ def _display_leaderboard(
     all_metrics: List[StrategyMetrics],
     scoring_engine: ScoringEngine,
 ) -> None:
-    """Display leaderboard with all metrics."""
-    st.markdown("### 🏆 Leaderboard (排行榜)")
+    """Display leaderboard with all metrics.
+    
+    This function can be called multiple times to update the leaderboard dynamically.
+    """
+    st.markdown("### 🏆 Leaderboard (排行榜) - 实时更新")
     
     if not all_metrics:
-        st.warning("没有可显示的结果。")
+        st.info("⏳ 等待测试结果...")
         return
     
     # Get benchmark model ID
@@ -1368,14 +1734,15 @@ def _display_leaderboard(
     df = pd.DataFrame(rows)
     
     # Apply styling for benchmark rows (light orange background)
-    def highlight_benchmark(row_idx):
+    def highlight_benchmark(row):
         """Apply light orange background to benchmark rows."""
-        if benchmark_flags[row_idx]:
+        row_idx = row.name  # Get the row index
+        if row_idx < len(benchmark_flags) and benchmark_flags[row_idx]:
             return ['background-color: #FFE5CC'] * len(df.columns)  # Light orange (#FFE5CC)
         return [''] * len(df.columns)
     
-    styled_df = df.style.apply(highlight_benchmark, axis=0)
-    st.dataframe(styled_df, use_container_width=True)
+    styled_df = df.style.apply(highlight_benchmark, axis=1)  # axis=1 for row-wise application
+    st.dataframe(styled_df, width='stretch')  # Use width='stretch' instead of use_container_width
 
 
 # Helper functions
@@ -1405,6 +1772,92 @@ def _get_model_id_by_display_name(display_name: str) -> Optional[str]:
         if model.display_name == display_name:
             return model.model_id
     return None
+
+
+def _save_benchmark_progress(
+    strategy_results: Dict[str, List[Dict[str, Any]]],
+    test_cases: List[Dict[str, Any]],
+    all_strategies: List[Tuple[str, Optional[str], str]],
+    fast_mode: bool,
+    test_set_path: str,
+) -> None:
+    """Save benchmark progress to disk.
+    
+    Args:
+        strategy_results: Current results for each strategy.
+        test_cases: List of test cases.
+        all_strategies: List of all strategies to test.
+        fast_mode: Whether fast mode was enabled.
+        test_set_path: Path to the test set file.
+    """
+    try:
+        # Ensure directory exists
+        BENCHMARK_PROGRESS_DIR.mkdir(parents=True, exist_ok=True)
+        
+        # Calculate progress
+        completed_strategies = []
+        for strategy_name, results in strategy_results.items():
+            if results:
+                completed_strategies.append({
+                    "strategy_name": strategy_name,
+                    "results": results,
+                })
+        
+        progress_data = {
+            "timestamp": time.time(),
+            "test_set_path": test_set_path,
+            "fast_mode": fast_mode,
+            "total_strategies": len(all_strategies),
+            "total_test_cases": len(test_cases),
+            "completed_strategies": completed_strategies,
+            "all_strategies": [
+                {
+                    "strategy_name": strategy_name,
+                    "small_model": small_model,
+                    "large_model": large_model,
+                }
+                for strategy_name, small_model, large_model in all_strategies
+            ],
+            "test_cases": test_cases,
+        }
+        
+        # Save to file
+        with open(BENCHMARK_PROGRESS_FILE, "w", encoding="utf-8") as f:
+            json.dump(progress_data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Benchmark progress saved to {BENCHMARK_PROGRESS_FILE}")
+    except Exception as e:
+        logger.error(f"Failed to save benchmark progress: {e}", exc_info=True)
+
+
+def _load_benchmark_progress() -> Optional[Dict[str, Any]]:
+    """Load benchmark progress from disk.
+    
+    Returns:
+        Progress data dictionary if file exists, None otherwise.
+    """
+    try:
+        if not BENCHMARK_PROGRESS_FILE.exists():
+            return None
+        
+        with open(BENCHMARK_PROGRESS_FILE, "r", encoding="utf-8") as f:
+            progress_data = json.load(f)
+        
+        logger.info(f"Benchmark progress loaded from {BENCHMARK_PROGRESS_FILE}")
+        return progress_data
+    except Exception as e:
+        logger.error(f"Failed to load benchmark progress: {e}", exc_info=True)
+        return None
+
+
+def _clear_benchmark_progress() -> None:
+    """Clear saved benchmark progress."""
+    try:
+        if BENCHMARK_PROGRESS_FILE.exists():
+            BENCHMARK_PROGRESS_FILE.unlink()
+            logger.info(f"Benchmark progress cleared: {BENCHMARK_PROGRESS_FILE}")
+    except Exception as e:
+        logger.error(f"Failed to clear benchmark progress: {e}", exc_info=True)
 
 
 

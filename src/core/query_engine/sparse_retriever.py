@@ -254,6 +254,8 @@ class SparseRetriever:
             List of RetrievalResult objects with complete information.
         """
         results = []
+        missing_count = 0
+        missing_chunk_ids = []
         
         for bm25_result, record in zip(bm25_results, records):
             chunk_id = bm25_result["chunk_id"]
@@ -261,7 +263,10 @@ class SparseRetriever:
             
             # Handle case where record was not found
             if not record:
-                logger.warning(
+                missing_count += 1
+                missing_chunk_ids.append(chunk_id)
+                # Use debug level instead of warning to reduce noise
+                logger.debug(
                     f"No record found in vector store for chunk_id='{chunk_id}'. "
                     "Skipping this result."
                 )
@@ -285,6 +290,22 @@ class SparseRetriever:
                     "Skipping this result."
                 )
                 continue
+        
+        # Log summary if there are missing records (but not too many to avoid spam)
+        if missing_count > 0:
+            if missing_count <= 5:
+                # Log individual missing IDs if few
+                logger.info(
+                    f"Sparse retrieval: {missing_count} of {len(bm25_results)} chunks not found in vector store. "
+                    f"Missing IDs: {missing_chunk_ids[:5]}"
+                )
+            else:
+                # Log summary if many
+                logger.info(
+                    f"Sparse retrieval: {missing_count} of {len(bm25_results)} chunks not found in vector store. "
+                    f"This may indicate BM25 index and vector store are out of sync. "
+                    f"Consider re-indexing or re-ingesting documents."
+                )
         
         return results
 
