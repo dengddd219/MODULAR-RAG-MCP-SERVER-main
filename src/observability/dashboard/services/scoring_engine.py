@@ -20,8 +20,9 @@ class StrategyMetrics:
     Attributes:
         strategy_name: Name of the strategy
         success_rate: Success rate (0-1)
-        avg_latency_s: Average latency in seconds
+        avg_latency_s: Average latency in seconds (generation time)
         p95_latency_s: P95 latency in seconds
+        avg_eval_time_s: Average evaluation time in seconds
         avg_tokens_per_query: Average tokens per query
         avg_cost_per_query: Average cost per query in USD
         total_cost: Total cost for all queries in USD
@@ -34,6 +35,7 @@ class StrategyMetrics:
     success_rate: float
     avg_latency_s: float
     p95_latency_s: float
+    avg_eval_time_s: float = 0.0
     avg_tokens_per_query: float
     avg_cost_per_query: float
     total_cost: float

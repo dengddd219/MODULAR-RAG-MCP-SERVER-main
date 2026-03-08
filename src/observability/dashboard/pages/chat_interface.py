@@ -145,6 +145,17 @@ def _initialize_session_state() -> None:
         # Initialize messages from the current conversation, if any.
         current = _get_current_conversation()
         st.session_state.messages = current.get("messages", []).copy() if current else []
+    
+    # Initialize model manager and register models
+    if "chat_model_manager" not in st.session_state:
+        _initialize_chat_models()
+    
+    # Initialize selected model (default to benchmark model)
+    if "selected_chat_model" not in st.session_state:
+        from src.core.settings import load_settings
+        settings = load_settings()
+        benchmark_id = _get_benchmark_model_id(settings)
+        st.session_state.selected_chat_model = benchmark_id
 
 
 def _get_current_conversation() -> Optional[Dict[str, Any]]:
@@ -155,6 +166,96 @@ def _get_current_conversation() -> Optional[Dict[str, Any]]:
         if conv["id"] == st.session_state.current_conversation_id:
             return conv
     return None
+
+
+def _get_benchmark_model_id(settings: Any) -> str:
+    """Get the benchmark model ID from settings."""
+    provider = settings.llm.provider
+    model_name = settings.llm.model
+    return f"{provider}-{model_name}".replace("/", "-").replace(":", "-")
+
+
+def _initialize_chat_models() -> None:
+    """Initialize and register all models for chat interface."""
+    try:
+        from src.core.settings import load_settings
+        from src.libs.llm.model_manager import ModelConfig, ModelManager
+        from src.libs.llm.llm_factory import LLMFactory
+        
+        settings = load_settings()
+        manager = ModelManager(settings)
+        
+        # Store benchmark model ID
+        benchmark_id = _get_benchmark_model_id(settings)
+        st.session_state.benchmark_model_id = benchmark_id
+        
+        # Available providers
+        available_providers = set(LLMFactory.list_providers())
+        
+        # Register benchmark model (from settings.yaml)
+        provider_display = settings.llm.provider.title()
+        benchmark_config = ModelConfig(
+            model_id=benchmark_id,
+            provider=settings.llm.provider,
+            model_name=settings.llm.model,
+            display_name=f"{provider_display} {settings.llm.model} [Benchmark]",
+            description="Benchmark model from settings.yaml",
+            is_small_model=False,
+        )
+        manager.register_model(benchmark_config)
+        
+        # Register Ollama models
+        if "ollama" in available_providers:
+            ollama_models = [
+                ("ollama-qwen2.5:7b", "qwen2.5:7b", "Ollama Qwen2.5 7B"),
+                ("ollama-llama3.1:8b", "llama3.1:8b", "Ollama Llama3.1 8B"),
+            ]
+            
+            for display_name, model_name, description in ollama_models:
+                model_id = display_name.replace(":", "-")
+                config = ModelConfig(
+                    model_id=model_id,
+                    provider="ollama",
+                    model_name=model_name,
+                    display_name=display_name,
+                    description=description,
+                    is_small_model=True,
+                )
+                manager.register_model(config)
+        
+        # Register API models (via OpenAI-compatible format)
+        if "openai" in available_providers:
+            api_key = getattr(settings.llm, "api_key", None)
+            
+            # Model name mapping and base URL mapping
+            api_models = [
+                ("api-deepseek-chat", "deepseek-chat", "https://api.zhizengzeng.com/v1", "DeepSeek Chat"),
+                ("api-gpt-4o-mini", "gpt-4o-mini", "https://api.zhizengzeng.com/v1", "OpenAI GPT-4o Mini"),
+                ("api-qwen-max", "qwen-max", "https://api.zhizengzeng.com/alibaba", "Qwen Max"),
+                ("api-glm-4-plus", "glm-4-plus", "https://api.zhizengzeng.com/v1", "GLM-4 Plus"),
+            ]
+            
+            for display_name, model_name, base_url, description in api_models:
+                model_id = display_name.replace(":", "-")
+                config = ModelConfig(
+                    model_id=model_id,
+                    provider="openai",
+                    model_name=model_name,
+                    display_name=display_name,
+                    description=description,
+                    is_small_model=False,
+                    config_override={
+                        "base_url": base_url,
+                        "api_key": api_key,
+                    },
+                )
+                manager.register_model(config)
+        
+        st.session_state.chat_model_manager = manager
+        logger.info("Chat models initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize chat models: {e}")
+        st.error(f"模型初始化失败: {e}")
 
 
 def _create_new_conversation() -> str:
@@ -196,7 +297,7 @@ def _update_conversation_title(conv_id: str, first_message: str) -> None:
         _save_conversations_to_disk()
 
 
-def _query_knowledge_base(query: str, collection: Optional[str] = None, top_k: int = 10) -> Dict[str, Any]:
+def _query_knowledge_base(query: str, collection: Optional[str] = None, top_k: int = 10, model_id: Optional[str] = None) -> Dict[str, Any]:
     """Query the knowledge base using complete RAG pipeline (Client-side).
     
     This implements the COMPLETE RAG workflow at the CLIENT level:
@@ -313,9 +414,22 @@ def _query_knowledge_base(query: str, collection: Optional[str] = None, top_k: i
         # Step 2: GENERATE (Client-side only - UI layer)
         # ===================================================================
         
+        # Get selected model or use default
+        effective_model_id = model_id or st.session_state.get("selected_chat_model")
+        
+        # Get LLM instance from ModelManager if available
+        llm_instance = None
+        if effective_model_id and "chat_model_manager" in st.session_state:
+            try:
+                manager = st.session_state.chat_model_manager
+                llm_instance = manager.get_llm(effective_model_id)
+                logger.info(f"Using selected model: {effective_model_id}")
+            except Exception as e:
+                logger.warning(f"Failed to get LLM from ModelManager: {e}, falling back to default")
+        
         # Generate LLM answer using RAGGenerator
-        # This uses the LLM configured in settings.yaml (e.g., Ollama)
-        rag_generator = RAGGenerator.create(settings=settings)
+        # Use selected model if available, otherwise use default from settings
+        rag_generator = RAGGenerator.create(settings=settings, llm=llm_instance)
         llm_answer = rag_generator.generate(
             query=query,
             results=results,
@@ -377,6 +491,63 @@ def render() -> None:
             _load_conversation(conv["id"])
             st.rerun()
     
+    # Sidebar: Model selection
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("**模型选择**")
+    
+    if "chat_model_manager" in st.session_state:
+        manager = st.session_state.chat_model_manager
+        all_models = manager.list_models()
+        benchmark_id = st.session_state.get("benchmark_model_id")
+        
+        # Format model options with benchmark marker
+        model_options = []
+        model_id_map = {}
+        for m in all_models:
+            display_name = m.display_name
+            if m.model_id == benchmark_id:
+                # Ensure benchmark marker is present
+                if "[Benchmark]" not in display_name:
+                    display_name = f"{display_name} [Benchmark]"
+            model_options.append(display_name)
+            model_id_map[display_name] = m.model_id
+        
+        # Get current selected model
+        current_model_id = st.session_state.get("selected_chat_model")
+        current_display = None
+        for m in all_models:
+            if m.model_id == current_model_id:
+                current_display = m.display_name
+                if m.model_id == benchmark_id and "[Benchmark]" not in current_display:
+                    current_display = f"{current_display} [Benchmark]"
+                break
+        
+        if current_display is None or current_display not in model_options:
+            current_display = model_options[0] if model_options else None
+        
+        # Model selector
+        try:
+            default_index = model_options.index(current_display) if current_display and model_options else 0
+        except ValueError:
+            default_index = 0
+        
+        selected_display = st.sidebar.selectbox(
+            "选择生成模型",
+            options=model_options,
+            index=default_index,
+            key="chat_model_selector",
+            help="选择用于RAG最终生成环节的大模型",
+        )
+        
+        # Update selected model ID
+        if selected_display in model_id_map:
+            selected_model_id = model_id_map[selected_display]
+            if st.session_state.get("selected_chat_model") != selected_model_id:
+                st.session_state.selected_chat_model = selected_model_id
+                logger.info(f"Model changed to: {selected_model_id}")
+    else:
+        st.sidebar.warning("模型管理器未初始化")
+    
     # Sidebar: User info
     st.sidebar.markdown("---")
     st.sidebar.markdown("**用户**")
@@ -435,6 +606,10 @@ def render() -> None:
     
     # Main chat area: Input
     if prompt := st.chat_input("输入消息..."):
+        # Record start time
+        import time
+        start_time = time.monotonic()
+        
         # Add user message
         user_msg = {"role": "user", "content": prompt}
         st.session_state.messages.append(user_msg)
@@ -452,8 +627,16 @@ def render() -> None:
         
         # Query knowledge base (complete RAG: Retrieve + Generate + Format)
         with st.chat_message("assistant"):
+            # Get selected model ID
+            selected_model_id = st.session_state.get("selected_chat_model")
             with st.spinner("🔍 正在检索知识库并生成回答..."):
-                result = _query_knowledge_base(prompt, top_k=10)
+                result = _query_knowledge_base(prompt, top_k=10, model_id=selected_model_id)
+            
+            # Calculate elapsed time
+            elapsed_time = time.monotonic() - start_time
+            
+            # Display elapsed time (small, subtle)
+            st.caption(f"⏱️ 运行时间: {elapsed_time:.2f}秒")
                 
                 # Display LLM-generated answer
                 st.markdown(result["content"])

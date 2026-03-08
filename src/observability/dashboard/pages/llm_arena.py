@@ -622,10 +622,12 @@ def _execute_playground_query(
         ragas_metrics = {}
         quality_score = 0.5  # Default to 50% when no evaluation
         default_metrics_used = []  # Track which metrics used default values
+        eval_time = 0.0  # Evaluation time in seconds
         
         if retrieved_chunks:
             try:
                 with st.spinner("正在运行 Ragas 评测..."):
+                    eval_start_time = time.monotonic()
                     settings = load_settings()
                     ragas_evaluator = RagasEvaluator(settings=settings)
                     ragas_metrics = ragas_evaluator.evaluate(
@@ -633,6 +635,7 @@ def _execute_playground_query(
                         retrieved_chunks=retrieved_chunks,
                         generated_answer=answer,
                     )
+                    eval_time = time.monotonic() - eval_start_time
                     # Check which metrics are missing and use defaults
                     if "faithfulness" not in ragas_metrics:
                         default_metrics_used.append("Faithfulness (忠实度)")
@@ -675,6 +678,14 @@ def _execute_playground_query(
         # 显示默认值提示（如果有）
         if default_metrics_used:
             st.info(f"ℹ️ 以下指标使用了默认分数 (0.5): {', '.join(default_metrics_used)}")
+        
+        # Display timing information (small, subtle)
+        st.markdown("#### ⏱️ 运行时间")
+        timing_col1, timing_col2 = st.columns(2)
+        with timing_col1:
+            st.caption(f"生成时长: {metrics.latency_ms / 1000.0:.2f}秒")
+        with timing_col2:
+            st.caption(f"测评时长: {eval_time:.2f}秒")
         
         # 使用网格布局展示关键指标（更直观的可视化）
         st.markdown("#### 📈 关键指标可视化")
@@ -1110,12 +1121,15 @@ def _execute_benchmark_query(
                 metrics.total_tokens = usage.get("total_tokens", 0)
         
         # Evaluate quality using Ragas with actual retrieved chunks
+        eval_time = 0.0
         try:
+            eval_start_time = time.monotonic()
             quality_metrics = ragas_evaluator.evaluate(
                 query=query,
                 retrieved_chunks=retrieved_chunks,
                 generated_answer=answer,
             )
+            eval_time = time.monotonic() - eval_start_time
             # Average of all metrics
             quality_scores = [v for v in quality_metrics.values() if isinstance(v, (int, float))]
             result["quality_score"] = (
@@ -1128,7 +1142,8 @@ def _execute_benchmark_query(
         
         # Fill result
         result["success"] = True
-        result["latency_s"] = elapsed
+        result["latency_s"] = elapsed  # Generation time
+        result["eval_time_s"] = eval_time  # Evaluation time
         result["tokens"] = metrics.total_tokens
         result["cost"] = metrics.calculate_cost()
     
@@ -1162,6 +1177,10 @@ def _compute_aggregated_metrics(
         avg_latency = sum(r["latency_s"] for r in successful) / success_count
         latencies = sorted([r["latency_s"] for r in successful])
         p95_latency = latencies[int(len(latencies) * 0.95)] if latencies else 0.0
+        
+        # Average evaluation time (default to 0.0 if not present)
+        eval_times = [r.get("eval_time_s", 0.0) for r in successful]
+        avg_eval_time = sum(eval_times) / len(eval_times) if eval_times else 0.0
         
         avg_tokens = sum(r["tokens"] for r in successful) / success_count
         avg_cost = sum(r["cost"] for r in successful) / success_count
@@ -1217,6 +1236,7 @@ def _compute_aggregated_metrics(
             success_rate=success_count / total if total > 0 else 0.0,
             avg_latency_s=avg_latency,
             p95_latency_s=p95_latency,
+            avg_eval_time_s=avg_eval_time,
             avg_tokens_per_query=avg_tokens,
             avg_cost_per_query=avg_cost,
             total_cost=total_cost,
@@ -1302,7 +1322,8 @@ def _display_leaderboard(
                 else "N/A"
             ),
             "成功率 (%)": f"{metrics.success_rate * 100:.2f}",
-            "平均延迟 (s)": f"{metrics.avg_latency_s:.3f}",
+            "平均生成时长 (s)": f"{metrics.avg_latency_s:.3f}",
+            "平均测评时长 (s)": f"{metrics.avg_eval_time_s:.3f}",
             "P95 延迟 (s)": f"{metrics.p95_latency_s:.3f}",
             "平均 Token/Query": f"{metrics.avg_tokens_per_query:.0f}",
             "单次平均成本 ($)": f"{metrics.avg_cost_per_query:.6f}",
