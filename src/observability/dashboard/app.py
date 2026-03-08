@@ -49,6 +49,11 @@ def _page_chat_interface() -> None:
     render()
 
 
+def _page_llm_arena() -> None:
+    from src.observability.dashboard.pages.llm_arena import render
+    render()
+
+
 # ── Navigation ───────────────────────────────────────────────────────
 
 pages = [
@@ -59,6 +64,7 @@ pages = [
     st.Page(_page_ingestion_traces, title="Ingestion Traces", icon="🔬"),
     st.Page(_page_query_traces, title="Query Traces", icon="🔎"),
     st.Page(_page_evaluation_panel, title="Evaluation Panel", icon="📏"),
+    st.Page(_page_llm_arena, title="LLM Arena", icon="🏟️"),
 ]
 
 

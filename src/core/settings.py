@@ -178,6 +178,22 @@ class IngestionSettings:
 
 
 @dataclass(frozen=True)
+class LLMRoutingSettings:
+    """Settings for LLM routing (hybrid strategy).
+    
+    Attributes:
+        small_model: Model identifier for small/fast model (e.g., "ollama-qwen2.5:7b")
+        large_model: Model identifier for large/powerful model (e.g., "api-deepseek-chat")
+        simple_intents: List of intent labels that should route to small model
+        complexity_threshold: Confidence threshold for routing decision (0-1)
+    """
+    small_model: str
+    large_model: str
+    simple_intents: List[str]
+    complexity_threshold: float
+
+
+@dataclass(frozen=True)
 class Settings:
     llm: LLMSettings
     embedding: EmbeddingSettings
@@ -188,6 +204,7 @@ class Settings:
     observability: ObservabilitySettings
     ingestion: Optional[IngestionSettings] = None
     vision_llm: Optional[VisionLLMSettings] = None
+    llm_routing: Optional[LLMRoutingSettings] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Settings":
@@ -227,6 +244,16 @@ class Settings:
                 azure_endpoint=vision_llm.get("azure_endpoint"),
                 deployment_name=vision_llm.get("deployment_name"),
                 base_url=vision_llm.get("base_url"),
+            )
+
+        llm_routing_settings = None
+        if "llm_routing" in data:
+            routing = _require_mapping(data, "llm_routing", "settings")
+            llm_routing_settings = LLMRoutingSettings(
+                small_model=_require_str(routing, "small_model", "llm_routing"),
+                large_model=_require_str(routing, "large_model", "llm_routing"),
+                simple_intents=[str(item) for item in _require_list(routing, "simple_intents", "llm_routing")],
+                complexity_threshold=_require_number(routing, "complexity_threshold", "llm_routing"),
             )
 
         settings = cls(
@@ -281,6 +308,7 @@ class Settings:
             ),
             ingestion=ingestion_settings,
             vision_llm=vision_llm_settings,
+            llm_routing=llm_routing_settings,
         )
 
         return settings

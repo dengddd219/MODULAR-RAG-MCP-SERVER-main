@@ -1,0 +1,146 @@
+{
+  "description": "Golden test set for model evaluation and selection - 20 test cases (16 simple queries, 4 complex queries) based on DEV_SPEC.md architecture documentation",
+  "version": "1.0",
+  "test_cases": [
+    {
+      "query_id": "Q001",
+      "query": "What is the default vector database used in this project?",
+      "expected_complexity": "simple",
+      "ground_truth": "This project uniformly uses Chroma as the default vector storage database.",
+      "expected_chunks": ["chunk_tech_stack_01", "chunk_vector_store_01"]
+    },
+    {
+      "query_id": "Q002",
+      "query": "What is the default port for the Dashboard visualization management platform?",
+      "expected_complexity": "simple",
+      "ground_truth": "The default port for Dashboard is 8501.",
+      "expected_chunks": ["chunk_config_01", "chunk_dashboard_01"]
+    },
+    {
+      "query_id": "Q003",
+      "query": "What document formats does the system currently support for parsing?",
+      "expected_complexity": "simple",
+      "ground_truth": "The system currently implements parsers for PDF (via MarkItDown) and Markdown (.md) formats.",
+      "expected_chunks": ["chunk_loader_01", "chunk_libs_loader_01"]
+    },
+    {
+      "query_id": "Q004",
+      "query": "For multimodal image processing, does the system use an image-to-text strategy or a multimodal vector strategy?",
+      "expected_complexity": "simple",
+      "ground_truth": "The system uses an Image-to-Text strategy, leveraging Vision LLM to generate image descriptions and embed them into text.",
+      "expected_chunks": ["chunk_multimodal_01"]
+    },
+    {
+      "query_id": "Q005",
+      "query": "What algorithm is used in the hybrid retrieval stage to fuse Dense and Sparse results?",
+      "expected_complexity": "simple",
+      "ground_truth": "The RRF (Reciprocal Rank Fusion) algorithm is used.",
+      "expected_chunks": ["chunk_hybrid_search_01", "chunk_retrieval_01"]
+    },
+    {
+      "query_id": "Q006",
+      "query": "What is the path where the database for file integrity checks to enable incremental updates is stored?",
+      "expected_complexity": "simple",
+      "ground_truth": "It is stored at data/db/ingestion_history.db (SQLite).",
+      "expected_chunks": ["chunk_storage_db_01", "chunk_file_integrity_01"]
+    },
+    {
+      "query_id": "Q007",
+      "query": "What evaluation frameworks does the system support?",
+      "expected_complexity": "simple",
+      "ground_truth": "It supports Ragas, DeepEval, and custom evaluation metrics.",
+      "expected_chunks": ["chunk_evaluation_01"]
+    },
+    {
+      "query_id": "Q008",
+      "query": "What transport protocol does the MCP Server use to communicate with the Client?",
+      "expected_complexity": "simple",
+      "ground_truth": "It uses Stdio Transport for local communication.",
+      "expected_chunks": ["chunk_mcp_transport_01"]
+    },
+    {
+      "query_id": "Q009",
+      "query": "What tool is used by default for text splitting (Splitter)?",
+      "expected_complexity": "simple",
+      "ground_truth": "It uses LangChain's RecursiveCharacterTextSplitter for splitting by default.",
+      "expected_chunks": ["chunk_splitter_01"]
+    },
+    {
+      "query_id": "Q010",
+      "query": "In which file are trace logs saved, and what format are they in?",
+      "expected_complexity": "simple",
+      "ground_truth": "They are saved in the logs/traces.jsonl file in JSON Lines format.",
+      "expected_chunks": ["chunk_trace_logs_01", "chunk_directory_structure_01"]
+    },
+    {
+      "query_id": "Q011",
+      "query": "How does the system handle the rerank stage if the reranking service times out or becomes unavailable?",
+      "expected_complexity": "simple",
+      "ground_truth": "The system provides a stable fallback strategy, falling back to the ranking from the fusion stage (RRF Top-K).",
+      "expected_chunks": ["chunk_rerank_fallback_01"]
+    },
+    {
+      "query_id": "Q012",
+      "query": "For pure Chinese language scenarios in domestic environments, which Vision LLM model is recommended for image processing?",
+      "expected_complexity": "simple",
+      "ground_truth": "Qwen-VL-Max is the first choice recommended for domestic use.",
+      "expected_chunks": ["chunk_vision_llm_01"]
+    },
+    {
+      "query_id": "Q013",
+      "query": "What is the name of the main retrieval tool exposed by MCP?",
+      "expected_complexity": "simple",
+      "ground_truth": "The name is query_knowledge_hub.",
+      "expected_chunks": ["chunk_mcp_tools_01"]
+    },
+    {
+      "query_id": "Q014",
+      "query": "How does the frontend Chat interface save conversation history?",
+      "expected_complexity": "simple",
+      "ground_truth": "Conversation history is serialized and saved to the local data/chat/conversations.json file.",
+      "expected_chunks": ["chunk_chat_interface_01"]
+    },
+    {
+      "query_id": "Q015",
+      "query": "What information is included in the hash combination algorithm when generating Chunk IDs?",
+      "expected_complexity": "simple",
+      "ground_truth": "It includes source_path, section_path, and content_hash.",
+      "expected_chunks": ["chunk_idempotency_01"]
+    },
+    {
+      "query_id": "Q016",
+      "query": "What are the two paths specifically referred to by dual-path hybrid encoding (Embedding)?",
+      "expected_complexity": "simple",
+      "ground_truth": "They refer to Dense Embeddings (semantic vectors) and Sparse Embeddings (sparse vectors/BM25).",
+      "expected_chunks": ["chunk_embedding_strategy_01"]
+    },
+    {
+      "query_id": "Q017",
+      "query": "Please explain in detail how the two-layer intent routing (Intent Router) in the system is designed and divided?",
+      "expected_complexity": "complex",
+      "ground_truth": "The two-layer routing is divided as follows: Layer 1 is the front-end spam and safety interception (Spam/Safety Gateway), using extremely lightweight binary classifiers (such as FastText or rules) to quickly identify and discard chitchat or malicious attacks, avoiding consumption of subsequent computing resources. Layer 2 is fine-grained business intent classification, using TF-IDF + XGBoost/Random Forest multi-class models to tag clean features with specific intent labels such as after-sales, care, styling, etc., to determine subsequent retrieval from different document libraries or short-circuit generation.",
+      "expected_chunks": ["chunk_intent_router_layer1_01", "chunk_intent_router_layer2_01"]
+    },
+    {
+      "query_id": "Q018",
+      "query": "How does the system achieve 'zero-cost' incremental updates to avoid duplicate processing during offline data ingestion?",
+      "expected_complexity": "complex",
+      "ground_truth": "The system performs early deduplication (Early Exit) before parsing files. First, it calculates the SHA256 hash fingerprint of the original file, then queries the SQLite database (ingestion_history table). If a record with the same Hash and status 'success' is found, it indicates the file has not changed, and the system will directly skip subsequent parsing, splitting, and vectorization processing, thereby achieving zero-cost incremental ingestion.",
+      "expected_chunks": ["chunk_early_exit_01", "chunk_ingestion_history_01"]
+    },
+    {
+      "query_id": "Q019",
+      "query": "How does the system process images in documents to achieve 'search-text-get-image' RAG capability? Please describe the complete workflow from ingestion to return.",
+      "expected_complexity": "complex",
+      "ground_truth": "1. Loader stage: Extract images and save them locally, inserting [IMAGE: {image_id}] placeholders in the text. 2. Splitter stage: Preserve placeholders and record image_refs in the chunk's metadata. 3. Transform stage: Call Vision LLM to generate image descriptions (Caption) and inject the description text into the chunk body. 4. Storage stage: Vectorize the text containing descriptions and store it in Chroma, and store the original image paths in the image_index lookup table. 5. After retrieval hits a chunk containing the image, read image_refs from metadata, look up the table to get the local image, and finally encode it as Base64 along with the text to return to the MCP Client.",
+      "expected_chunks": ["chunk_multimodal_loader_01", "chunk_multimodal_transform_01", "chunk_multimodal_storage_01"]
+    },
+    {
+      "query_id": "Q020",
+      "query": "If I want to switch the current LLM from Azure OpenAI to locally deployed Ollama, what code needs to be modified? How does the system architecture support this switch?",
+      "expected_complexity": "complex",
+      "ground_truth": "No business code modification is required at all. The system adopts a fully pluggable architecture (configuration-driven + abstract factory pattern). Simply change the llm.provider field from azure to ollama in the config/settings.yaml file, and configure the corresponding base_url and model name. After restarting the service, LLMFactory will automatically read the new configuration and instantiate the corresponding OllamaLLM implementation class.",
+      "expected_chunks": ["chunk_pluggable_arch_01", "chunk_llm_factory_01", "chunk_config_yaml_01"]
+    }
+  ]
+}

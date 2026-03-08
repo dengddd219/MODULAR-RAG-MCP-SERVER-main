@@ -20,6 +20,17 @@ from src.libs.llm.llm_factory import LLMFactory
 
 logger = logging.getLogger(__name__)
 
+# Optional imports for routing support
+try:
+    from src.core.query_engine.intent_router import IntentRouter, IntentRoutingResult
+    from src.libs.llm.model_manager import ModelManager
+    ROUTING_AVAILABLE = True
+except ImportError:
+    ROUTING_AVAILABLE = False
+    IntentRouter = None  # type: ignore
+    IntentRoutingResult = None  # type: ignore
+    ModelManager = None  # type: ignore
+
 
 class RAGGenerator:
     """Generates LLM answers from retrieved chunks using RAG pattern.
@@ -45,6 +56,8 @@ class RAGGenerator:
         llm: Optional[BaseLLM] = None,
         prompt_path: Optional[str] = None,
         max_context_length: int = 4000,
+        intent_router: Optional[Any] = None,
+        model_manager: Optional[Any] = None,
     ) -> None:
         """Initialize RAGGenerator.
         
@@ -53,11 +66,15 @@ class RAGGenerator:
             llm: Optional LLM instance. If None, creates via LLMFactory from settings.
             prompt_path: Optional path to prompt template. Defaults to config/prompts/rag_generation.txt.
             max_context_length: Maximum characters for context (to avoid token limits).
+            intent_router: Optional IntentRouter for dynamic routing (hybrid strategy).
+            model_manager: Optional ModelManager for model switching (hybrid strategy).
         """
         self.settings = settings
         self.llm = llm
         self.prompt_path = prompt_path or str(resolve_path("config/prompts/rag_generation.txt"))
         self.max_context_length = max_context_length
+        self.intent_router = intent_router
+        self.model_manager = model_manager
         
         # Load prompt template
         self.prompt_template = self._load_prompt_template()
@@ -172,12 +189,17 @@ class RAGGenerator:
         if not results:
             return "抱歉，我没有在知识库中找到相关信息。请尝试换一个问法或检查知识库是否已正确索引。"
         
+        # Dynamic routing logic (if enabled)
+        effective_llm = self._get_llm_with_routing(query, trace)
+        
         # Get or create LLM (from settings.yaml, e.g., Ollama)
-        if self.llm is None:
-            if self.settings is None:
-                from src.core.settings import load_settings
-                self.settings = load_settings()
-            self.llm = LLMFactory.create(self.settings)
+        if effective_llm is None:
+            if self.llm is None:
+                if self.settings is None:
+                    from src.core.settings import load_settings
+                    self.settings = load_settings()
+                self.llm = LLMFactory.create(self.settings)
+            effective_llm = self.llm
         
         # Build context
         context = self._build_context(results)
@@ -188,7 +210,7 @@ class RAGGenerator:
         # Call LLM
         try:
             messages = [Message(role="user", content=prompt)]
-            response = self.llm.chat(messages, trace=trace)
+            response = effective_llm.chat(messages, trace=trace)
             
             # Extract content
             if isinstance(response, str):
@@ -325,6 +347,111 @@ class RAGGenerator:
         except Exception as e:
             logger.debug(f"Failed to get Ollama models: {e}")
             return f"   （无法获取: {str(e)}）"
+    
+    def _get_llm_with_routing(
+        self,
+        query: str,
+        trace: Optional[Any] = None,
+    ) -> Optional[BaseLLM]:
+        """Get LLM instance with dynamic routing (if routing is enabled).
+        
+        This method implements the routing logic:
+        1. Get query
+        2. Call IntentRouter.route(query) to get predicted_complexity and confidence
+        3. If intent hits simple_intents list AND confidence >= complexity_threshold,
+           switch to small_model; otherwise switch to large_model
+        
+        Args:
+            query: User query string.
+            trace: Optional TraceContext for observability.
+            
+        Returns:
+            BaseLLM instance if routing is enabled and successful, None otherwise.
+        """
+        # Check if routing is available and enabled
+        if not ROUTING_AVAILABLE:
+            return None
+        
+        if self.settings is None:
+            from src.core.settings import load_settings
+            self.settings = load_settings()
+        
+        # Check if routing is configured
+        if not hasattr(self.settings, "llm_routing") or self.settings.llm_routing is None:
+            return None
+        
+        routing_config = self.settings.llm_routing
+        
+        # Check if we have required components
+        if self.intent_router is None:
+            try:
+                self.intent_router = IntentRouter()
+            except Exception as e:
+                logger.warning(f"Failed to create IntentRouter: {e}")
+                return None
+        
+        if self.model_manager is None:
+            try:
+                from src.libs.llm.model_manager import ModelManager
+                self.model_manager = ModelManager(self.settings)
+            except Exception as e:
+                logger.warning(f"Failed to create ModelManager: {e}")
+                return None
+        
+        # Route query
+        try:
+            routing_result = self.intent_router.route(query)
+            
+            # Get routing parameters
+            simple_intents = routing_config.simple_intents
+            complexity_threshold = routing_config.complexity_threshold
+            
+            # Determine which model to use
+            intent_label = routing_result.intent_label or ""
+            confidence = routing_result.intent_confidence or 0.0
+            
+            is_simple = (
+                intent_label.lower() in [s.lower() for s in simple_intents]
+                and confidence >= complexity_threshold
+            )
+            
+            if is_simple:
+                # Route to small model
+                model_id = routing_config.small_model.replace(":", "-").replace("/", "-")
+                logger.info(
+                    f"Routing to small model: {model_id} "
+                    f"(intent: {intent_label}, confidence: {confidence:.2f})"
+                )
+            else:
+                # Route to large model
+                model_id = routing_config.large_model.replace(":", "-").replace("/", "-")
+                logger.info(
+                    f"Routing to large model: {model_id} "
+                    f"(intent: {intent_label or 'unknown'}, confidence: {confidence:.2f})"
+                )
+            
+            # Get LLM instance from ModelManager
+            try:
+                self.model_manager.set_current_model(model_id)
+                llm = self.model_manager.get_llm()
+                
+                # Record routing decision in trace
+                if trace is not None:
+                    trace.metadata["routing_decision"] = {
+                        "model_id": model_id,
+                        "intent_label": intent_label,
+                        "confidence": confidence,
+                        "is_simple": is_simple,
+                    }
+                
+                return llm
+            except Exception as e:
+                logger.warning(f"Failed to get LLM from ModelManager: {e}")
+                return None
+        
+        except Exception as e:
+            logger.warning(f"Routing failed: {e}")
+            return None
     
     @classmethod
     def create(cls, settings: Optional[Any] = None, **kwargs) -> "RAGGenerator":
