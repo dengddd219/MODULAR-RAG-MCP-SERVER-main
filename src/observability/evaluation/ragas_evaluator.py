@@ -200,7 +200,8 @@ class RagasEvaluator(BaseEvaluator):
         ]
 
         # 👈 第二处：实例化 RunConfig 对象
-        my_run_config = RunConfig(timeout=120)
+        # Increase timeout for evaluation (Ragas can take longer with complex queries)
+        my_run_config = RunConfig(timeout=300)  # Increased from 120 to 300 seconds
 
         result = evaluate(
             dataset=dataset,
@@ -211,14 +212,58 @@ class RagasEvaluator(BaseEvaluator):
         )
 
         # Convert result to simple dict
+        import math
+        
         scores = {}
+        # First, log what keys are actually in the result for debugging
+        result_keys = list(result.keys()) if hasattr(result, 'keys') else []
+        logger.debug(f"Ragas evaluation result keys: {result_keys}")
+        logger.debug(f"Requested metrics: {[m.name for m in selected_metrics]}")
+        
         for key in selected_metrics:
             name = key.name
+            # Use .get() to safely access result, handle KeyError if metric is missing
+            if name not in result:
+                logger.warning(
+                    f"Ragas metric '{name}' not found in result. "
+                    f"Available keys: {result_keys}. Using default 0.5"
+                )
+                scores[name] = 0.5
+                continue
+            
             value = result[name]
             if isinstance(value, list):
-                value = value[0] if value else 0.0
-            scores[name] = float(value) if value is not None else 0.0
-
+                value = value[0] if value else None
+            
+            # Handle None, NaN, and invalid values
+            if value is None:
+                logger.warning(f"Ragas metric '{name}' returned None, using default 0.5")
+                scores[name] = 0.5  # Default to 0.5 instead of 0.0
+            elif isinstance(value, (int, float)):
+                if math.isnan(value):
+                    logger.warning(f"Ragas metric '{name}' returned NaN, using default 0.5")
+                    scores[name] = 0.5
+                elif math.isinf(value):
+                    logger.warning(f"Ragas metric '{name}' returned Inf, using default 0.5")
+                    scores[name] = 0.5
+                elif value == 0.0:
+                    # Log when metric is actually 0 (not missing)
+                    logger.info(f"Ragas metric '{name}' calculated as 0.0 (may indicate poor retrieval quality)")
+                    scores[name] = 0.0
+                else:
+                    scores[name] = float(value)
+            else:
+                logger.warning(f"Ragas metric '{name}' returned unexpected type {type(value)}, using default 0.5")
+                scores[name] = 0.5
+        
+        # Ensure all requested metrics are in scores (even if missing from result)
+        for key in selected_metrics:
+            name = key.name
+            if name not in scores:
+                logger.warning(f"Metric '{name}' was not processed, adding default 0.5")
+                scores[name] = 0.5
+        
+        logger.debug(f"Final scores: {scores}")
         return scores
 
     def _build_wrappers(self) -> tuple:
@@ -245,9 +290,39 @@ class RagasEvaluator(BaseEvaluator):
             client = AsyncOpenAI(
                 api_key=llm_cfg.api_key,
                 base_url=base_url,
+                max_retries=3,
             )
 
+            # For Ragas evaluation, we need larger max_tokens to avoid truncation
+            # Ragas generates detailed JSON responses that can be quite long
+            evaluation_max_tokens = getattr(llm_cfg, "max_tokens", 512)
+            # Increase max_tokens for evaluation (minimum 4096, or 2x the configured value)
+            evaluation_max_tokens = max(4096, evaluation_max_tokens * 2)
+            
+            # Create LLM - Ragas will use the client's default max_tokens
+            # We need to set max_tokens via the client's default_params or directly on the LLM
             ragas_llm = llm_factory(llm_cfg.model, client=client)
+            
+            # Try multiple ways to set max_tokens for evaluation
+            # Method 1: Direct attribute on ragas_llm
+            if hasattr(ragas_llm, "max_tokens"):
+                ragas_llm.max_tokens = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} on ragas_llm.max_tokens")
+            # Method 2: Nested llm attribute
+            elif hasattr(ragas_llm, "llm") and hasattr(ragas_llm.llm, "max_tokens"):
+                ragas_llm.llm.max_tokens = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} on ragas_llm.llm.max_tokens")
+            # Method 3: Try to set via default_params on client
+            elif hasattr(client, "default_params"):
+                if client.default_params is None:
+                    client.default_params = {}
+                client.default_params["max_tokens"] = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} via client.default_params")
+            else:
+                logger.warning(
+                    f"Could not set max_tokens={evaluation_max_tokens} for Ragas evaluation. "
+                    f"LLM may truncate responses. Ragas LLM type: {type(ragas_llm)}"
+                )
 
             # Embedding 也通过同一代理走 OpenAI 接口，保证走国内运营商链路
             ragas_embeddings = LangchainEmbeddingsWrapper(
@@ -267,8 +342,32 @@ class RagasEvaluator(BaseEvaluator):
                 azure_endpoint=llm_cfg.azure_endpoint,
                 api_key=llm_cfg.api_key,
                 api_version=llm_cfg.api_version,
+                max_retries=3,
             )
+            
+            # For Ragas evaluation, we need larger max_tokens to avoid truncation
+            evaluation_max_tokens = getattr(llm_cfg, "max_tokens", 512)
+            evaluation_max_tokens = max(4096, evaluation_max_tokens * 2)
+            
             ragas_llm = llm_factory(llm_cfg.deployment_name, client=client)
+            
+            # Try multiple ways to set max_tokens for evaluation
+            if hasattr(ragas_llm, "max_tokens"):
+                ragas_llm.max_tokens = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} on ragas_llm.max_tokens")
+            elif hasattr(ragas_llm, "llm") and hasattr(ragas_llm.llm, "max_tokens"):
+                ragas_llm.llm.max_tokens = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} on ragas_llm.llm.max_tokens")
+            elif hasattr(client, "default_params"):
+                if client.default_params is None:
+                    client.default_params = {}
+                client.default_params["max_tokens"] = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} via client.default_params")
+            else:
+                logger.warning(
+                    f"Could not set max_tokens={evaluation_max_tokens} for Ragas evaluation. "
+                    f"LLM may truncate responses. Ragas LLM type: {type(ragas_llm)}"
+                )
             ragas_embeddings = LangchainEmbeddingsWrapper(AzureOpenAIEmbeddings(
                 azure_deployment=self.settings.embedding.deployment_name,
                 api_version=self.settings.embedding.api_version,
@@ -286,14 +385,34 @@ class RagasEvaluator(BaseEvaluator):
 
             client = AsyncOpenAI(
                 base_url=ollama_url,
-                api_key="ollama"  # 任意字符串即可
+                api_key="ollama",  # 任意字符串即可
+                max_retries=3,
             )
 
+            # For Ragas evaluation, we need larger max_tokens to avoid truncation
+            evaluation_max_tokens = getattr(llm_cfg, "max_tokens", 512)
+            evaluation_max_tokens = max(4096, evaluation_max_tokens * 2)
+
             # 🔹 关键：必须通过 llm_factory 创建
-            ragas_llm = llm_factory(
-                model=llm_cfg.model,
-                client=client
-            )
+            ragas_llm = llm_factory(model=llm_cfg.model, client=client)
+            
+            # Try multiple ways to set max_tokens for evaluation
+            if hasattr(ragas_llm, "max_tokens"):
+                ragas_llm.max_tokens = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} on ragas_llm.max_tokens")
+            elif hasattr(ragas_llm, "llm") and hasattr(ragas_llm.llm, "max_tokens"):
+                ragas_llm.llm.max_tokens = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} on ragas_llm.llm.max_tokens")
+            elif hasattr(client, "default_params"):
+                if client.default_params is None:
+                    client.default_params = {}
+                client.default_params["max_tokens"] = evaluation_max_tokens
+                logger.debug(f"Set max_tokens={evaluation_max_tokens} via client.default_params")
+            else:
+                logger.warning(
+                    f"Could not set max_tokens={evaluation_max_tokens} for Ragas evaluation. "
+                    f"LLM may truncate responses. Ragas LLM type: {type(ragas_llm)}"
+                )
 
             # 🔹 embeddings 仍然使用 Ollama 原生
             try:

@@ -147,73 +147,142 @@ class ScoringEngine:
             all_metrics: List of all StrategyMetrics for normalization
             
         Returns:
-            Composite score in [0, 100]
+            Composite score in [0, 100], guaranteed to be a valid float (not NaN)
         """
-        # Extract ranges for normalization
-        costs = [m.avg_cost_per_query for m in all_metrics if m.avg_cost_per_query > 0]
-        latencies = [m.p95_latency_s for m in all_metrics]
-        qualities = [m.avg_quality_score for m in all_metrics]
+        import math
+        
+        # Helper function to filter out NaN and invalid values
+        def is_valid(value: float) -> bool:
+            """Check if value is valid (not NaN, not inf, not None)."""
+            if value is None:
+                return False
+            try:
+                return not (math.isnan(value) or math.isinf(value))
+            except (TypeError, ValueError):
+                return False
+        
+        # Extract ranges for normalization, filtering out NaN and invalid values
+        costs = [
+            m.avg_cost_per_query 
+            for m in all_metrics 
+            if is_valid(m.avg_cost_per_query) and m.avg_cost_per_query > 0
+        ]
+        latencies = [
+            m.p95_latency_s 
+            for m in all_metrics 
+            if is_valid(m.p95_latency_s) and m.p95_latency_s >= 0
+        ]
+        qualities = [
+            m.avg_quality_score 
+            for m in all_metrics 
+            if is_valid(m.avg_quality_score) and 0 <= m.avg_quality_score <= 1
+        ]
         routing_accs = [
             m.routing_total_accuracy
             for m in all_metrics
-            if m.routing_total_accuracy is not None
+            if m.routing_total_accuracy is not None 
+            and is_valid(m.routing_total_accuracy) 
+            and 0 <= m.routing_total_accuracy <= 1
         ]
         
-        # Compute normalized scores
+        # Compute normalized scores with NaN protection
         cost_score = 0.5  # Default neutral
-        if costs:
-            min_cost = min(costs)
-            max_cost = max(costs)
-            cost_score = self.normalize_negative(
-                metrics.avg_cost_per_query,
-                min_cost,
-                max_cost,
-            )
+        if costs and is_valid(metrics.avg_cost_per_query) and metrics.avg_cost_per_query > 0:
+            try:
+                min_cost = min(costs)
+                max_cost = max(costs)
+                if min_cost < max_cost:  # Avoid division by zero
+                    cost_score = self.normalize_negative(
+                        metrics.avg_cost_per_query,
+                        min_cost,
+                        max_cost,
+                    )
+                    # Ensure result is valid
+                    if not is_valid(cost_score):
+                        cost_score = 0.5
+            except (ValueError, TypeError, ZeroDivisionError):
+                cost_score = 0.5
         
         latency_score = 0.5  # Default neutral
-        if latencies:
-            min_latency = min(latencies)
-            max_latency = max(latencies)
-            latency_score = self.normalize_negative(
-                metrics.p95_latency_s,
-                min_latency,
-                max_latency,
-            )
+        if latencies and is_valid(metrics.p95_latency_s) and metrics.p95_latency_s >= 0:
+            try:
+                min_latency = min(latencies)
+                max_latency = max(latencies)
+                if min_latency < max_latency:  # Avoid division by zero
+                    latency_score = self.normalize_negative(
+                        metrics.p95_latency_s,
+                        min_latency,
+                        max_latency,
+                    )
+                    # Ensure result is valid
+                    if not is_valid(latency_score):
+                        latency_score = 0.5
+            except (ValueError, TypeError, ZeroDivisionError):
+                latency_score = 0.5
         
         quality_score = 0.5  # Default neutral
-        if qualities:
-            min_quality = min(qualities)
-            max_quality = max(qualities)
-            quality_score = self.normalize_positive(
-                metrics.avg_quality_score,
-                min_quality,
-                max_quality,
-            )
+        if qualities and is_valid(metrics.avg_quality_score) and 0 <= metrics.avg_quality_score <= 1:
+            try:
+                min_quality = min(qualities)
+                max_quality = max(qualities)
+                if min_quality < max_quality:  # Avoid division by zero
+                    quality_score = self.normalize_positive(
+                        metrics.avg_quality_score,
+                        min_quality,
+                        max_quality,
+                    )
+                    # Ensure result is valid
+                    if not is_valid(quality_score):
+                        quality_score = 0.5
+            except (ValueError, TypeError, ZeroDivisionError):
+                quality_score = 0.5
         
         # Routing accuracy (only for hybrid strategies)
         routing_score = 0.5  # Default neutral
-        if metrics.routing_total_accuracy is not None and routing_accs:
-            min_routing = min(routing_accs)
-            max_routing = max(routing_accs)
-            routing_score = self.normalize_positive(
-                metrics.routing_total_accuracy,
-                min_routing,
-                max_routing,
+        if (metrics.routing_total_accuracy is not None 
+            and routing_accs 
+            and is_valid(metrics.routing_total_accuracy)
+            and 0 <= metrics.routing_total_accuracy <= 1):
+            try:
+                min_routing = min(routing_accs)
+                max_routing = max(routing_accs)
+                if min_routing < max_routing:  # Avoid division by zero
+                    routing_score = self.normalize_positive(
+                        metrics.routing_total_accuracy,
+                        min_routing,
+                        max_routing,
+                    )
+                    # Ensure result is valid
+                    if not is_valid(routing_score):
+                        routing_score = 0.5
+            except (ValueError, TypeError, ZeroDivisionError):
+                routing_score = 0.5
+        
+        # Compute weighted composite score with NaN protection
+        try:
+            composite = (
+                self.cost_weight * cost_score +
+                self.latency_weight * latency_score +
+                self.quality_weight * quality_score
             )
-        
-        # Compute weighted composite score
-        composite = (
-            self.cost_weight * cost_score +
-            self.latency_weight * latency_score +
-            self.quality_weight * quality_score
-        )
-        
-        # Add routing score if applicable
-        if metrics.routing_total_accuracy is not None and self.routing_weight > 0:
-            composite += self.routing_weight * routing_score
-            # Re-normalize to account for routing weight
-            composite /= (1.0 - self.routing_weight + self.routing_weight)
-        
-        # Convert to 0-100 scale
-        return composite * 100.0
+            
+            # Add routing score if applicable
+            if metrics.routing_total_accuracy is not None and self.routing_weight > 0:
+                composite += self.routing_weight * routing_score
+                # Re-normalize to account for routing weight
+                composite /= (1.0 - self.routing_weight + self.routing_weight)
+            
+            # Ensure composite is valid before converting
+            if not is_valid(composite):
+                composite = 0.5
+            
+            # Convert to 0-100 scale and clamp to valid range
+            result = composite * 100.0
+            if not is_valid(result):
+                result = 50.0  # Default to 50 if invalid
+            
+            return max(0.0, min(100.0, result))  # Clamp to [0, 100]
+        except (ValueError, TypeError, ZeroDivisionError):
+            # Fallback to neutral score if any calculation fails
+            return 50.0
 
