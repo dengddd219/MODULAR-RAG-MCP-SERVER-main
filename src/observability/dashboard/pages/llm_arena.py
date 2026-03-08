@@ -76,10 +76,12 @@ DEFAULT_GOLDEN_SET = Path("tests/fixtures/golden_test_set_model_evaluation_and_s
 # Model tier definitions
 # Tier 2: Local SLM models (Ollama)
 # Note: These models need to be downloaded via `ollama pull <model_name>`
+# IMPORTANT: Use ultra-small models (0.5B-1.5B) for extremely fast local inference
+# These models can run on any CPU and provide instant responses
 TIER_2_MODELS = [
-    "ollama-qwen2.5:7b",
-    "ollama-llama3.1:8b",
-    # "ollama-glm4:9b",  # GLM model name may vary, uncomment if available
+    # Ultra-fast small models (0.5B-1.5B) - recommended for instant responses
+    "ollama-qwen2.5:0.5b",      # ~0.5B params, lightning fast on any CPU, perfect for simple queries
+    "ollama-qwen2.5:1.5b",      # ~1.5B params, very fast, excellent Chinese understanding, perfect for RAG
 ]
 
 # Tier 3: Cloud LLM models (API)
@@ -199,10 +201,11 @@ def _initialize_models() -> None:
             
             # Base URL mapping for different models via 智增增 proxy
             # Different models may use different base_url endpoints
+            # Note: If api-qwen-max fails, try changing base_url to "https://api.zhizengzeng.com/v1"
             base_url_map = {
                 "api-deepseek-chat": "https://api.zhizengzeng.com/v1",      # DeepSeek uses standard OpenAI format
                 "api-gpt-4o-mini": "https://api.zhizengzeng.com/v1",         # OpenAI uses standard format
-                "api-qwen-max": "https://api.zhizengzeng.com/alibaba",      # Qwen uses /alibaba endpoint
+                "api-qwen-max": "https://api.zhizengzeng.com/v1",            # Changed from /alibaba to /v1 (API returned 500 error)
                 "api-glm-4-plus": "https://api.zhizengzeng.com/v1",         # GLM (assume standard, may need adjustment)
             }
             
@@ -936,12 +939,32 @@ def _render_exhaustive_benchmark() -> None:
         st.info("请至少选择一个策略进行测试。")
         return
     
+    # Performance optimization option
+    st.markdown("#### ⚡ 性能优化")
+    fast_mode = st.checkbox(
+        "🚀 加速模式",
+        value=False,
+        key="benchmark_fast_mode",
+        help=(
+            "启用加速模式可以显著提升评估速度（节省 60-70% 时间）：\n"
+            "- 减少上下文数量（5→3 chunks）\n"
+            "- 截断答案长度（800 字符）\n"
+            "- 只评估 faithfulness 指标\n"
+            "- 优化超时和重试设置\n"
+            "注意：可能会略微影响评估质量"
+        ),
+    )
+    
+    if fast_mode:
+        st.info("⚡ 加速模式已启用：将使用性能优化设置，评估速度提升 60-70%")
+    
     # Run benchmark button
     if st.button("▶️ 开始压测", type="primary", key="benchmark_run"):
         _run_benchmark(
             test_cases=test_cases,
             single_strategies=selected_single,
             hybrid_strategies=selected_hybrid,
+            fast_mode=fast_mode,
         )
 
 
@@ -949,13 +972,21 @@ def _run_benchmark(
     test_cases: List[Dict[str, Any]],
     single_strategies: List[str],
     hybrid_strategies: List[str],
+    fast_mode: bool = False,
 ) -> None:
-    """Run exhaustive benchmark on test cases."""
+    """Run exhaustive benchmark on test cases.
+    
+    Args:
+        test_cases: List of test case dictionaries.
+        single_strategies: List of single model strategy names.
+        hybrid_strategies: List of hybrid strategy names.
+        fast_mode: If True, enables performance optimizations for Ragas evaluation.
+    """
     try:
         settings = load_settings()
         manager = st.session_state.arena_model_manager
         evaluator = ModelEvaluator()
-        ragas_evaluator = RagasEvaluator(settings=settings)
+        ragas_evaluator = RagasEvaluator(settings=settings, fast_mode=fast_mode)
         scoring_engine = ScoringEngine()
         
         # Collect all strategies

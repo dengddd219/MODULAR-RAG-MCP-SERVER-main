@@ -252,7 +252,7 @@ class RAGGenerator:
 1. **检查模型是否已安装**:
    - 如果使用 Ollama: 运行 `ollama list` 查看已安装的模型
    - 如果模型未安装: 运行 `ollama pull {model_name}` 安装模型
-   - 注意: 模型名称可能需要包含标签，例如 `llama3.1:8b` 而不是 `llama3.1`
+   - 注意: 模型名称可能需要包含标签，例如 `qwen2.5:1.5b` 而不是 `qwen2.5`
 
 2. **可用的 Ollama 模型**:
 {available_models}
@@ -261,7 +261,7 @@ class RAGGenerator:
    ```yaml
    llm:
      provider: "ollama"
-     model: "llama3.1:8b"  # 使用完整的模型名称，或使用上面列出的可用模型
+     model: "qwen2.5:1.5b"  # 使用完整的模型名称，或使用上面列出的可用模型
    ```
 
 4. **检查 Ollama 服务**:

@@ -22,9 +22,8 @@ def check_ollama_models():
     print("="*60)
     
     required_models = [
-        "qwen2.5:7b",
-        "llama3.1:8b",
-        "glm4:9b",
+        "qwen2.5:0.5b",  # Ultra-fast, lightning speed on any CPU
+        "qwen2.5:1.5b",  # Very fast, excellent Chinese understanding, perfect for RAG
     ]
     
     try:

@@ -49,9 +49,8 @@ def test_model_registration() -> None:
         
         # Register Tier 2 models
         tier2_models = [
-            "ollama-qwen2.5:7b",
-            "ollama-llama3.1:8b",
-            "ollama-glm4:9b",
+            "ollama-qwen2.5:0.5b",  # Ultra-fast, lightning speed on any CPU
+            "ollama-qwen2.5:1.5b",  # Very fast, excellent Chinese understanding, perfect for RAG
         ]
         
         for model_name in tier2_models:
@@ -311,9 +310,8 @@ def main() -> None:
     
     print("\n📊 Available Models for Developers:")
     print("\nTier 2 - Local SLM (Small Models):")
-    print("  - ollama-qwen2.5:7b")
-    print("  - ollama-llama3.1:8b")
-    print("  - ollama-glm4:9b")
+    print("  - ollama-qwen2.5:0.5b (Ultra-fast, lightning speed)")
+    print("  - ollama-qwen2.5:1.5b (Very fast, excellent Chinese understanding)")
     print("\nTier 3 - Cloud LLM (Large Models):")
     print("  - api-deepseek-chat (DeepSeek-V3)")
     print("  - api-qwen-max (通义千问)")

@@ -182,7 +182,7 @@ class LLMRoutingSettings:
     """Settings for LLM routing (hybrid strategy).
     
     Attributes:
-        small_model: Model identifier for small/fast model (e.g., "ollama-qwen2.5:7b")
+        small_model: Model identifier for small/fast model (e.g., "ollama-qwen2.5:1.5b")
         large_model: Model identifier for large/powerful model (e.g., "api-deepseek-chat")
         simple_intents: List of intent labels that should route to small model
         complexity_threshold: Confidence threshold for routing decision (0-1)

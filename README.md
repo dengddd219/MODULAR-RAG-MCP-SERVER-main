@@ -34,6 +34,25 @@ pip install -e ".[dev]"
 - **Azure OpenAI**：`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_ENDPOINT`（若在 settings 中未填 endpoint）
 - **OpenAI**：`OPENAI_API_KEY`
 
+#### RAGAS 评估专用配置
+
+RAGAS 评估（LLM-as-Judge）使用独立的 OpenAI 兼容 API，**不受主业务 LLM 配置影响**，始终使用 `gpt-4o-mini` 进行快速评估。需要设置以下环境变量：
+
+- **`EVAL_API_KEY`**（必需）：用于 RAGAS 评估的 OpenAI 兼容 API 密钥
+- **`EVAL_BASE_URL`**（可选）：API 基础 URL，默认为 `https://api.openai.com/v1`
+
+```bash
+# Windows PowerShell
+$env:EVAL_API_KEY="your-openai-api-key"
+$env:EVAL_BASE_URL="https://api.openai.com/v1"  # 可选
+
+# Linux/macOS
+export EVAL_API_KEY="your-openai-api-key"
+export EVAL_BASE_URL="https://api.openai.com/v1"  # 可选
+```
+
+> **注意**：即使主业务使用本地 Ollama 模型，RAGAS 评估也会使用配置的 OpenAI 兼容 API，确保评估速度和稳定性。
+
 ### 3. 运行首次摄取
 
 ```bash

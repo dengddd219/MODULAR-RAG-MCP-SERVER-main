@@ -11,8 +11,8 @@
 - **模型选择器功能**：在Chat界面侧边栏添加模型选择器，支持用户选择不同的大模型用于RAG最终生成环节
   - 支持模型列表：
     - Openai gpt-4o-mini [Benchmark]（从settings.yaml读取的基准模型）
-    - ollama-qwen2.5:7b（本地Ollama模型）
-    - ollama-llama3.1:8b（本地Ollama模型）
+    - ollama-qwen2.5:0.5b（本地Ollama模型，极速）
+    - ollama-qwen2.5:1.5b（本地Ollama模型，推荐）
     - api-deepseek-chat（通过智增增代理的DeepSeek API）
     - api-gpt-4o-mini（通过智增增代理的OpenAI API）
     - api-qwen-max（通过智增增代理的Qwen API）

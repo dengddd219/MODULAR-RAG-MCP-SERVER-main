@@ -130,12 +130,24 @@ class ModelEvaluator:
     """
     
     # Default pricing (per 1000 tokens) - can be overridden
+    # Note: Pricing data sources:
+    # - OpenAI official pricing: https://openai.com/api/pricing/
+    # - DeepSeek pricing: https://www.deepseek.com/pricing (approximate)
+    # - Qwen pricing: Based on Alibaba Cloud pricing (approximate)
+    # - GLM pricing: Based on Zhipu AI pricing (approximate)
     DEFAULT_PRICING: Dict[str, Dict[str, float]] = {
         "openai": {
             "gpt-4o": {"input": 0.005, "output": 0.015},
             "gpt-4o-mini": {"input": 0.00015, "output": 0.0006},
             "gpt-4-turbo": {"input": 0.01, "output": 0.03},
             "gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
+            # Models via 智增增 proxy (OpenAI-compatible format)
+            "deepseek-chat": {"input": 0.00014, "output": 0.00028},  # DeepSeek pricing
+            "qwen-max": {"input": 0.0002, "output": 0.0004},  # Qwen pricing (approximate)
+            "qwen-plus": {"input": 0.0001, "output": 0.0002},  # Qwen pricing (approximate)
+            "glm-4-plus": {"input": 0.0003, "output": 0.0006},  # GLM pricing (approximate)
+            # Fallback for unknown OpenAI-compatible models
+            "default": {"input": 0.00015, "output": 0.0006},  # Use gpt-4o-mini pricing as fallback
         },
         "ollama": {
             "default": {"input": 0.0, "output": 0.0},  # Local, no cost

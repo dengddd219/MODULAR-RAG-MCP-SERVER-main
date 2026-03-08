@@ -207,8 +207,8 @@ def _initialize_chat_models() -> None:
         # Register Ollama models
         if "ollama" in available_providers:
             ollama_models = [
-                ("ollama-qwen2.5:7b", "qwen2.5:7b", "Ollama Qwen2.5 7B"),
-                ("ollama-llama3.1:8b", "llama3.1:8b", "Ollama Llama3.1 8B"),
+                ("ollama-qwen2.5:0.5b", "qwen2.5:0.5b", "Ollama Qwen2.5 0.5B (极速)"),
+                ("ollama-qwen2.5:1.5b", "qwen2.5:1.5b", "Ollama Qwen2.5 1.5B (推荐)"),
             ]
             
             for display_name, model_name, description in ollama_models:
@@ -228,10 +228,11 @@ def _initialize_chat_models() -> None:
             api_key = getattr(settings.llm, "api_key", None)
             
             # Model name mapping and base URL mapping
+            # Note: api-qwen-max base_url changed from /alibaba to /v1 due to API 500 error
             api_models = [
                 ("api-deepseek-chat", "deepseek-chat", "https://api.zhizengzeng.com/v1", "DeepSeek Chat"),
                 ("api-gpt-4o-mini", "gpt-4o-mini", "https://api.zhizengzeng.com/v1", "OpenAI GPT-4o Mini"),
-                ("api-qwen-max", "qwen-max", "https://api.zhizengzeng.com/alibaba", "Qwen Max"),
+                ("api-qwen-max", "qwen-max", "https://api.zhizengzeng.com/v1", "Qwen Max"),  # Changed from /alibaba to /v1
                 ("api-glm-4-plus", "glm-4-plus", "https://api.zhizengzeng.com/v1", "GLM-4 Plus"),
             ]
             
