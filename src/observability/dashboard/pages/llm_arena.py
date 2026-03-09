@@ -1375,20 +1375,43 @@ def _run_benchmark(
                         test_set_path=test_set_path,
                     )
                 except Exception as e:
-                    logger.error(f"Failed to execute query for strategy {strategy_name}: {e}", exc_info=True)
+                    logger.error(
+                        f"Failed to execute query for strategy {strategy_name}, "
+                        f"query '{query[:50]}...': {e}", 
+                        exc_info=True
+                    )
                     stage_text.empty()
-                    # Add failed result
-                    strategy_results[strategy_name].append({
+                    # Add failed result with all required fields
+                    failed_result = {
                         "query": query,
                         "query_id": query_id,
                         "success": False,
-                        "error": str(e),
+                        "error": str(e)[:200],  # Truncate error message
+                        "answer": "",
+                        "retrieved_chunks": [],
                         "latency_s": 0.0,
+                        "eval_time_s": 0.0,
                         "tokens": 0,
                         "cost": 0.0,
                         "quality_score": 50.0,
                         "expected_complexity": expected_complexity,
-                    })
+                        "routing_predicted": None,
+                        "routing_correct": None,
+                        "routing_confidence": 0.0,
+                    }
+                    strategy_results[strategy_name].append(failed_result)
+                    
+                    # Save progress even for failed queries
+                    try:
+                        _save_benchmark_progress(
+                            strategy_results=strategy_results,
+                            test_cases=test_cases,
+                            all_strategies=all_strategies,
+                            fast_mode=fast_mode,
+                            test_set_path=test_set_path,
+                        )
+                    except Exception as save_exc:
+                        logger.warning(f"Failed to save progress after error: {save_exc}")
                     
                     # Save progress even on error
                     _save_benchmark_progress(
@@ -1610,26 +1633,44 @@ def _execute_benchmark_query(
                 if not answer or not answer.strip():
                     logger.warning(f"Empty answer generated for query: {query[:50]}...")
                     answer = "抱歉，未能生成有效回答。"
+                
+                # Validate retrieved chunks
+                if not retrieved_chunks:
+                    logger.warning(f"No chunks retrieved for query: {query[:50]}...")
             except Exception as rag_exc:
                 elapsed = time.monotonic() - start_time
-                logger.error(f"RAG pipeline failed: {rag_exc}", exc_info=True)
-                raise RuntimeError(f"RAG pipeline execution failed: {rag_exc}") from rag_exc
+                logger.error(f"RAG pipeline failed for strategy {strategy_name}, query '{query[:50]}...': {rag_exc}", exc_info=True)
+                # Don't raise - return error result instead to allow benchmark to continue
+                result["error"] = f"RAG pipeline failed: {str(rag_exc)[:200]}"
+                result["success"] = False
+                result["answer"] = "抱歉，RAG 管道执行失败。"
+                result["retrieved_chunks"] = []
+                result["latency_s"] = elapsed
+                result["eval_time_s"] = 0.0
+                result["quality_score"] = 50.0
+                result["tokens"] = 0
+                result["cost"] = 0.0
+                return result
             
-            # Update metrics
-            metrics.latency_ms = elapsed * 1000.0
-            metrics.response_length = len(answer)
-            
-            # Try to extract token usage from trace
-            try:
-                if hasattr(trace, "metadata") and trace.metadata and "token_usage" in trace.metadata:
-                    usage = trace.metadata["token_usage"]
-                    if isinstance(usage, dict):
-                        metrics.prompt_tokens = usage.get("prompt_tokens", 0) or 0
-                        metrics.completion_tokens = usage.get("completion_tokens", 0) or 0
-                        metrics.total_tokens = usage.get("total_tokens", 0) or 0
-            except Exception as token_exc:
-                logger.warning(f"Failed to extract token usage from trace: {token_exc}")
-                # Continue with default values (0)
+            # Update metrics (only if metrics object exists)
+            if 'metrics' in locals() and metrics is not None:
+                try:
+                    metrics.latency_ms = elapsed * 1000.0
+                    metrics.response_length = len(answer)
+                    
+                    # Try to extract token usage from trace
+                    try:
+                        if hasattr(trace, "metadata") and trace.metadata and "token_usage" in trace.metadata:
+                            usage = trace.metadata["token_usage"]
+                            if isinstance(usage, dict):
+                                metrics.prompt_tokens = usage.get("prompt_tokens", 0) or 0
+                                metrics.completion_tokens = usage.get("completion_tokens", 0) or 0
+                                metrics.total_tokens = usage.get("total_tokens", 0) or 0
+                    except Exception as token_exc:
+                        logger.warning(f"Failed to extract token usage from trace: {token_exc}")
+                        # Continue with default values (0)
+                except Exception as metrics_update_exc:
+                    logger.warning(f"Failed to update metrics: {metrics_update_exc}")
         
         # Evaluate quality using Ragas with actual retrieved chunks
         eval_time = 0.0
@@ -1641,63 +1682,116 @@ def _execute_benchmark_query(
             
             # Check if we have valid retrieved chunks
             if not retrieved_chunks:
-                logger.warning(f"No retrieved chunks for query, using default quality score")
+                logger.warning(f"No retrieved chunks for query '{query[:50]}...', using default quality score")
                 result["quality_score"] = 50.0
                 result["eval_error"] = "No retrieved chunks"
+                result["eval_time_s"] = 0.0
             else:
+                # Pre-truncate answer to prevent Ragas max_tokens issues
+                # RagasEvaluator will handle truncation, but we do it here too for safety
+                max_answer_length = 2000  # Conservative limit
+                if len(answer) > max_answer_length:
+                    logger.debug(f"Pre-truncating answer from {len(answer)} to {max_answer_length} chars before Ragas evaluation")
+                    # Try to truncate at sentence boundary
+                    truncated = answer[:max_answer_length]
+                    last_period = truncated.rfind('.')
+                    last_newline = truncated.rfind('\n')
+                    cut_point = max(last_period, last_newline)
+                    if cut_point > max_answer_length * 0.8:  # Only use if we keep at least 80%
+                        answer = truncated[:cut_point + 1]
+                    else:
+                        answer = truncated + "..."
+                
                 eval_start_time = time.monotonic()
-                quality_metrics = ragas_evaluator.evaluate(
-                    query=query,
-                    retrieved_chunks=retrieved_chunks,
-                    generated_answer=answer,
-                )
-                eval_time = time.monotonic() - eval_start_time
-                
-                # Log the raw metrics for debugging
-                logger.info(f"Ragas metrics for query: {quality_metrics}")
-                
-                # Average of all metrics
-                quality_scores = [
-                    v for v in quality_metrics.values() 
-                    if isinstance(v, (int, float)) and not math.isnan(v) and not math.isinf(v)
-                ]
-                if quality_scores:
-                    result["quality_score"] = sum(quality_scores) / len(quality_scores) * 100.0
-                    result["ragas_metrics"] = quality_metrics  # Store raw metrics for debugging
-                else:
-                    logger.warning(f"No valid quality scores extracted, using default")
-                    result["quality_score"] = 50.0
-                    result["eval_error"] = "No valid scores from Ragas"
-                    result["ragas_metrics"] = quality_metrics  # Store even if invalid
+                try:
+                    quality_metrics = ragas_evaluator.evaluate(
+                        query=query,
+                        retrieved_chunks=retrieved_chunks,
+                        generated_answer=answer,
+                    )
+                    eval_time = time.monotonic() - eval_start_time
+                    
+                    # Log the raw metrics for debugging (only if valid)
+                    if quality_metrics:
+                        logger.debug(f"Ragas metrics for query '{query[:50]}...': {quality_metrics}")
+                    
+                    # Average of all metrics
+                    quality_scores = [
+                        v for v in quality_metrics.values() 
+                        if isinstance(v, (int, float)) and not math.isnan(v) and not math.isinf(v)
+                    ]
+                    if quality_scores:
+                        result["quality_score"] = sum(quality_scores) / len(quality_scores) * 100.0
+                        result["ragas_metrics"] = quality_metrics  # Store raw metrics for debugging
+                    else:
+                        logger.warning(f"No valid quality scores extracted for query '{query[:50]}...', using default")
+                        result["quality_score"] = 50.0
+                        result["eval_error"] = "No valid scores from Ragas"
+                        result["ragas_metrics"] = quality_metrics  # Store even if invalid
+                except Exception as inner_eval_exc:
+                    eval_time = time.monotonic() - eval_start_time
+                    logger.error(f"Ragas evaluation failed for query '{query[:50]}...': {inner_eval_exc}", exc_info=True)
+                    result["quality_score"] = 50.0  # Default fallback
+                    result["eval_error"] = str(inner_eval_exc)[:200]  # Truncate error message
+                    result["ragas_metrics"] = {}
         except Exception as eval_exc:
-            logger.error(f"Ragas evaluation failed for query: {eval_exc}", exc_info=True)
+            logger.error(f"Ragas evaluation exception for query '{query[:50]}...': {eval_exc}", exc_info=True)
             result["quality_score"] = 50.0  # Default fallback
-            result["eval_error"] = str(eval_exc)
+            result["eval_error"] = str(eval_exc)[:200]  # Truncate error message
             result["ragas_metrics"] = {}
+            result["eval_time_s"] = 0.0
         
         # Fill result with all metrics
         result["success"] = True
         result["latency_s"] = elapsed  # Generation time
         result["eval_time_s"] = eval_time  # Evaluation time
         
-        # Safely extract metrics
+        # Safely extract metrics (only if metrics object exists and was successfully created)
+        result["tokens"] = 0
+        result["cost"] = 0.0
         try:
-            result["tokens"] = metrics.total_tokens if hasattr(metrics, 'total_tokens') else 0
-            result["cost"] = metrics.calculate_cost() if hasattr(metrics, 'calculate_cost') else 0.0
+            # Try to get from metrics object (if available)
+            if 'metrics' in locals() and metrics is not None:
+                try:
+                    if hasattr(metrics, 'total_tokens'):
+                        result["tokens"] = metrics.total_tokens or 0
+                    if hasattr(metrics, 'calculate_cost'):
+                        result["cost"] = metrics.calculate_cost() or 0.0
+                except Exception as metrics_attr_exc:
+                    logger.debug(f"Failed to access metrics attributes: {metrics_attr_exc}")
+            
+            # Fallback: try to extract from trace metadata if metrics not available
+            if result["tokens"] == 0 and 'trace' in locals() and trace is not None:
+                try:
+                    if hasattr(trace, "metadata") and trace.metadata and "token_usage" in trace.metadata:
+                        usage = trace.metadata["token_usage"]
+                        if isinstance(usage, dict):
+                            result["tokens"] = usage.get("total_tokens", 0) or 0
+                            # Estimate cost if available
+                            if "cost" in usage:
+                                result["cost"] = usage.get("cost", 0.0)
+                except Exception as trace_exc:
+                    logger.debug(f"Failed to extract from trace metadata: {trace_exc}")
         except Exception as metrics_exc:
             logger.warning(f"Failed to extract metrics: {metrics_exc}")
-            result["tokens"] = 0
-            result["cost"] = 0.0
+            # Keep default values (0)
         
         result["answer_length"] = len(answer) if answer else 0
         result["retrieved_chunks_count"] = len(retrieved_chunks) if retrieved_chunks else 0
         
-        # Log successful completion
-        logger.info(
-            f"Benchmark query completed: strategy={strategy_name}, "
-            f"quality_score={result.get('quality_score', 0):.2f}, "
-            f"latency={elapsed:.2f}s, tokens={metrics.total_tokens}"
-        )
+        # Log successful completion (only if no errors)
+        if result.get("success", False) and not result.get("error"):
+            logger.info(
+                f"Benchmark query completed: strategy={strategy_name}, "
+                f"query='{query[:50]}...', "
+                f"quality_score={result.get('quality_score', 0):.2f}, "
+                f"latency={elapsed:.2f}s, tokens={result.get('tokens', 0)}"
+            )
+        elif result.get("error"):
+            logger.warning(
+                f"Benchmark query completed with error: strategy={strategy_name}, "
+                f"query='{query[:50]}...', error={result.get('error', 'Unknown')[:100]}"
+            )
     
     except Exception as e:
         logger.error(f"Benchmark query failed for strategy {strategy_name}: {e}", exc_info=True)
@@ -1758,6 +1852,33 @@ def _compute_aggregated_metrics(
         quality_scores = [q for q in quality_scores if not (isinstance(q, float) and (q != q))]  # Remove NaN
         avg_quality = sum(quality_scores) / len(quality_scores) if quality_scores else 0.5
         
+        # Extract RAGAS detailed metrics from ragas_metrics
+        faithfulness_scores = []
+        answer_relevancy_scores = []
+        context_precision_scores = []
+        
+        for r in successful:
+            ragas_metrics = r.get("ragas_metrics", {})
+            if isinstance(ragas_metrics, dict):
+                # Extract individual RAGAS metrics (they are already 0-1 range)
+                if "faithfulness" in ragas_metrics:
+                    val = ragas_metrics["faithfulness"]
+                    if isinstance(val, (int, float)) and not (isinstance(val, float) and (val != val)):  # Not NaN
+                        faithfulness_scores.append(float(val))
+                if "answer_relevancy" in ragas_metrics:
+                    val = ragas_metrics["answer_relevancy"]
+                    if isinstance(val, (int, float)) and not (isinstance(val, float) and (val != val)):  # Not NaN
+                        answer_relevancy_scores.append(float(val))
+                if "context_precision" in ragas_metrics:
+                    val = ragas_metrics["context_precision"]
+                    if isinstance(val, (int, float)) and not (isinstance(val, float) and (val != val)):  # Not NaN
+                        context_precision_scores.append(float(val))
+        
+        # Compute averages (use None if no valid scores)
+        avg_faithfulness = sum(faithfulness_scores) / len(faithfulness_scores) if faithfulness_scores else None
+        avg_answer_relevancy = sum(answer_relevancy_scores) / len(answer_relevancy_scores) if answer_relevancy_scores else None
+        avg_context_precision = sum(context_precision_scores) / len(context_precision_scores) if context_precision_scores else None
+        
         # Routing accuracy (only for hybrid strategies)
         routing_total_accuracy = None
         routing_simple_accuracy = None
@@ -1805,6 +1926,9 @@ def _compute_aggregated_metrics(
             total_cost=total_cost,
             avg_quality_score=avg_quality,
             avg_eval_time_s=avg_eval_time,
+            avg_faithfulness=avg_faithfulness,
+            avg_answer_relevancy=avg_answer_relevancy,
+            avg_context_precision=avg_context_precision,
             routing_total_accuracy=routing_total_accuracy,
             routing_simple_accuracy=routing_simple_accuracy,
             routing_complex_accuracy=routing_complex_accuracy,
@@ -1851,8 +1975,29 @@ def _display_leaderboard(
         
         3. **质量得分** (越高越好，正向指标)
            - 基于 Ragas 评估指标（Faithfulness, Answer Relevancy, Context Precision）
-           - 公式：`质量得分 = (当前质量 - 最小质量) / (最大质量 - 最小质量)`
-           - 范围：0-1，转换为 0-100 分
+           
+           **计算过程（两步）：**
+           
+           **第一步：单个查询的质量得分**
+           - 对每个测试用例，通过 RAGAS 评估得到三个指标：
+             - **Faithfulness (忠实度)**：答案是否忠实于检索到的上下文（0-1，越高越好）
+             - **Answer Relevancy (答案相关性)**：答案是否与查询相关（0-1，越高越好）
+             - **Context Precision (上下文精确度)**：检索到的上下文是否精确相关（0-1，越高越好）
+           - 单个查询的质量得分 = (Faithfulness + Answer Relevancy + Context Precision) / 3 × 100
+           - 结果范围：0-100 分
+           
+           **第二步：策略的平均质量得分**
+           - 收集该策略所有成功查询的质量得分
+           - 平均质量得分 = 所有查询质量得分的平均值 / 100
+           - 结果范围：0-1（在排行榜中显示为 0-100%）
+           
+           **综合评分中的质量得分计算：**
+           - 公式：`质量得分 = (当前策略的平均质量 - 所有策略中的最小平均质量) / (最大平均质量 - 最小平均质量)`
+           - 范围：0-1，转换为 0-100 分后参与综合评分计算
+           
+           **说明：**
+           - 所有 RAGAS 指标都通过 LLM-as-Judge 方式评估，无需人工标注
+           - 如果某个查询的 RAGAS 评估失败，使用默认值 50 分（0.5）
         
         4. **路由准确率得分** (仅双模型策略，越高越好，正向指标)
            - 公式：`路由得分 = (当前准确率 - 最小准确率) / (最大准确率 - 最小准确率)`
@@ -1965,6 +2110,21 @@ def _display_leaderboard(
             "单次平均成本 ($)": f"{metrics.avg_cost_per_query:.6f}",
             "总压测成本 ($)": f"{metrics.total_cost:.6f}",
             "平均质量得分": f"{metrics.avg_quality_score * 100:.2f}",
+            "Faithfulness (忠实度)": (
+                f"{metrics.avg_faithfulness * 100:.2f}"
+                if metrics.avg_faithfulness is not None
+                else "N/A"
+            ),
+            "Answer Relevancy (答案相关性)": (
+                f"{metrics.avg_answer_relevancy * 100:.2f}"
+                if metrics.avg_answer_relevancy is not None
+                else "N/A"
+            ),
+            "Context Precision (上下文精确度)": (
+                f"{metrics.avg_context_precision * 100:.2f}"
+                if metrics.avg_context_precision is not None
+                else "N/A"
+            ),
         }
         rows.append(row)
         benchmark_flags.append(is_benchmark)
@@ -1982,6 +2142,165 @@ def _display_leaderboard(
     
     styled_df = df.style.apply(highlight_benchmark, axis=1)  # axis=1 for row-wise application
     st.dataframe(styled_df, width='stretch')  # Use width='stretch' instead of use_container_width
+    
+    # Display comparison: First place vs Benchmark
+    if len(all_metrics) > 0:
+        first_place = all_metrics[0]  # First place (highest composite score)
+        
+        # Find benchmark strategy (single model strategy with [Benchmark])
+        benchmark_strategy = None
+        for m in all_metrics:
+            if "[Benchmark]" in m.strategy_name and " + " not in m.strategy_name:
+                benchmark_strategy = m
+                break
+        
+        if benchmark_strategy and first_place.strategy_name != benchmark_strategy.strategy_name:
+            st.markdown("---")
+            st.markdown("### 🎯 第一名 vs Benchmark 对比")
+            
+            # Calculate improvements
+            def calculate_improvement(new_val: float, old_val: float, higher_is_better: bool = True) -> tuple:
+                """Calculate improvement percentage and direction."""
+                if old_val == 0:
+                    return (float('inf') if new_val > 0 else 0.0, "N/A")
+                
+                if higher_is_better:
+                    improvement = ((new_val - old_val) / old_val) * 100
+                    direction = "提升" if improvement > 0 else "下降"
+                else:
+                    improvement = ((old_val - new_val) / old_val) * 100
+                    direction = "提升" if improvement > 0 else "下降"
+                
+                return (improvement, direction)
+            
+            # Composite score improvement
+            comp_improvement, comp_dir = calculate_improvement(
+                first_place.composite_score, 
+                benchmark_strategy.composite_score, 
+                higher_is_better=True
+            )
+            
+            # Cost improvement (lower is better)
+            cost_improvement, cost_dir = calculate_improvement(
+                first_place.avg_cost_per_query,
+                benchmark_strategy.avg_cost_per_query,
+                higher_is_better=False
+            )
+            
+            # Latency improvement (lower is better)
+            latency_improvement, latency_dir = calculate_improvement(
+                first_place.avg_latency_s,
+                benchmark_strategy.avg_latency_s,
+                higher_is_better=False
+            )
+            
+            # Quality improvement (higher is better)
+            quality_improvement, quality_dir = calculate_improvement(
+                first_place.avg_quality_score,
+                benchmark_strategy.avg_quality_score,
+                higher_is_better=True
+            )
+            
+            # Display comparison cards
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                comp_delta = f"{comp_improvement:+.2f}%" if comp_improvement != float('inf') else "N/A"
+                st.metric(
+                    "综合评分",
+                    f"{first_place.composite_score:.2f}",
+                    delta=comp_delta,
+                    delta_color="normal" if comp_improvement > 0 else "inverse",
+                    help=f"Benchmark: {benchmark_strategy.composite_score:.2f}"
+                )
+            
+            with col2:
+                cost_delta = f"{cost_improvement:+.2f}%" if cost_improvement != float('inf') else "N/A"
+                st.metric(
+                    "平均成本",
+                    f"${first_place.avg_cost_per_query:.6f}",
+                    delta=cost_delta,
+                    delta_color="normal" if cost_improvement > 0 else "inverse",
+                    help=f"Benchmark: ${benchmark_strategy.avg_cost_per_query:.6f}"
+                )
+            
+            with col3:
+                latency_delta = f"{latency_improvement:+.2f}%" if latency_improvement != float('inf') else "N/A"
+                st.metric(
+                    "平均延迟",
+                    f"{first_place.avg_latency_s:.3f}s",
+                    delta=latency_delta,
+                    delta_color="normal" if latency_improvement > 0 else "inverse",
+                    help=f"Benchmark: {benchmark_strategy.avg_latency_s:.3f}s"
+                )
+            
+            with col4:
+                quality_delta = f"{quality_improvement:+.2f}%" if quality_improvement != float('inf') else "N/A"
+                st.metric(
+                    "平均质量",
+                    f"{first_place.avg_quality_score * 100:.2f}%",
+                    delta=quality_delta,
+                    delta_color="normal" if quality_improvement > 0 else "inverse",
+                    help=f"Benchmark: {benchmark_strategy.avg_quality_score * 100:.2f}%"
+                )
+            
+            # Detailed comparison table
+            with st.expander("📊 详细对比表", expanded=False):
+                comparison_data = {
+                    "指标": [
+                        "综合评分",
+                        "平均成本 ($)",
+                        "平均延迟 (秒)",
+                        "P95 延迟 (秒)",
+                        "平均质量得分 (%)",
+                        "Faithfulness (%)",
+                        "Answer Relevancy (%)",
+                        "Context Precision (%)",
+                        "平均Token数",
+                        "总成本 ($)",
+                    ],
+                    f"🥇 {first_place.strategy_name}": [
+                        f"{first_place.composite_score:.2f}",
+                        f"{first_place.avg_cost_per_query:.6f}",
+                        f"{first_place.avg_latency_s:.3f}",
+                        f"{first_place.p95_latency_s:.3f}",
+                        f"{first_place.avg_quality_score * 100:.2f}",
+                        f"{first_place.avg_faithfulness * 100:.2f}" if first_place.avg_faithfulness is not None else "N/A",
+                        f"{first_place.avg_answer_relevancy * 100:.2f}" if first_place.avg_answer_relevancy is not None else "N/A",
+                        f"{first_place.avg_context_precision * 100:.2f}" if first_place.avg_context_precision is not None else "N/A",
+                        f"{first_place.avg_tokens_per_query:.0f}",
+                        f"{first_place.total_cost:.6f}",
+                    ],
+                    f"🏆 {benchmark_strategy.strategy_name}": [
+                        f"{benchmark_strategy.composite_score:.2f}",
+                        f"{benchmark_strategy.avg_cost_per_query:.6f}",
+                        f"{benchmark_strategy.avg_latency_s:.3f}",
+                        f"{benchmark_strategy.p95_latency_s:.3f}",
+                        f"{benchmark_strategy.avg_quality_score * 100:.2f}",
+                        f"{benchmark_strategy.avg_faithfulness * 100:.2f}" if benchmark_strategy.avg_faithfulness is not None else "N/A",
+                        f"{benchmark_strategy.avg_answer_relevancy * 100:.2f}" if benchmark_strategy.avg_answer_relevancy is not None else "N/A",
+                        f"{benchmark_strategy.avg_context_precision * 100:.2f}" if benchmark_strategy.avg_context_precision is not None else "N/A",
+                        f"{benchmark_strategy.avg_tokens_per_query:.0f}",
+                        f"{benchmark_strategy.total_cost:.6f}",
+                    ],
+                    "提升/下降": [
+                        f"{comp_improvement:+.2f}%" if comp_improvement != float('inf') else "N/A",
+                        f"{cost_improvement:+.2f}%" if cost_improvement != float('inf') else "N/A",
+                        f"{latency_improvement:+.2f}%" if latency_improvement != float('inf') else "N/A",
+                        f"{calculate_improvement(first_place.p95_latency_s, benchmark_strategy.p95_latency_s, False)[0]:+.2f}%" if benchmark_strategy.p95_latency_s > 0 else "N/A",
+                        f"{quality_improvement:+.2f}%" if quality_improvement != float('inf') else "N/A",
+                        f"{calculate_improvement(first_place.avg_faithfulness or 0, benchmark_strategy.avg_faithfulness or 0, True)[0]:+.2f}%" if (first_place.avg_faithfulness and benchmark_strategy.avg_faithfulness) else "N/A",
+                        f"{calculate_improvement(first_place.avg_answer_relevancy or 0, benchmark_strategy.avg_answer_relevancy or 0, True)[0]:+.2f}%" if (first_place.avg_answer_relevancy and benchmark_strategy.avg_answer_relevancy) else "N/A",
+                        f"{calculate_improvement(first_place.avg_context_precision or 0, benchmark_strategy.avg_context_precision or 0, True)[0]:+.2f}%" if (first_place.avg_context_precision and benchmark_strategy.avg_context_precision) else "N/A",
+                        f"{calculate_improvement(first_place.avg_tokens_per_query, benchmark_strategy.avg_tokens_per_query, False)[0]:+.2f}%" if benchmark_strategy.avg_tokens_per_query > 0 else "N/A",
+                        f"{calculate_improvement(first_place.total_cost, benchmark_strategy.total_cost, False)[0]:+.2f}%" if benchmark_strategy.total_cost > 0 else "N/A",
+                    ],
+                }
+                
+                comparison_df = pd.DataFrame(comparison_data)
+                st.dataframe(comparison_df, width='stretch', use_container_width=True)
+                
+                st.caption("💡 提示：提升百分比中，正数表示改进（成本/延迟降低或质量/评分提高），负数表示下降。")
     
     # Display detailed scoring breakdown for each strategy
     # Ensure this section is full-width by placing it outside any column context
@@ -2058,8 +2377,17 @@ def _display_leaderboard(
         # Composite score comparison
         try:
             import matplotlib.pyplot as plt
+            import matplotlib
             import numpy as np
             matplotlib_available = True
+            
+            # Configure Chinese font support
+            try:
+                # Try to use system fonts that support Chinese
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False  # Fix minus sign display
+            except Exception:
+                pass  # Fallback to default font if Chinese fonts not available
         except ImportError:
             matplotlib_available = False
             st.warning("matplotlib 未安装，无法显示图表。请运行: pip install matplotlib")
@@ -2080,6 +2408,10 @@ def _display_leaderboard(
             colors = ['#FF8C00' if '[Benchmark]' in m.strategy_name and ' + ' not in m.strategy_name else '#4A90E2' 
                      for m in sorted_metrics]
             
+            # Highlight first place with gold color
+            if len(colors) > 0:
+                colors[0] = '#FFD700'  # Gold color for first place
+            
             bars = ax.barh(strategy_names, composite_scores, color=colors)
             ax.set_xlabel('综合评分', fontsize=12, fontweight='bold')
             ax.set_ylabel('策略名称', fontsize=12, fontweight='bold')
@@ -2087,11 +2419,20 @@ def _display_leaderboard(
             ax.set_xlim(0, 100)
             ax.grid(axis='x', alpha=0.3)
             
-            # Add value labels on bars
+            # Add value labels on bars and mark first place
             for i, (bar, score) in enumerate(zip(bars, composite_scores)):
                 width = bar.get_width()
-                ax.text(width + 1, bar.get_y() + bar.get_height()/2, 
-                       f'{score:.2f}', ha='left', va='center', fontweight='bold')
+                y_pos = bar.get_y() + bar.get_height()/2
+                
+                # Add rank indicator for first place
+                if i == 0:
+                    ax.text(width + 1, y_pos, 
+                           f'🥇 {score:.2f}', ha='left', va='center', 
+                           fontweight='bold', fontsize=11, color='#FF6B00')
+                else:
+                    ax.text(width + 1, y_pos, 
+                           f'{score:.2f}', ha='left', va='center', 
+                           fontweight='bold')
             
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
@@ -2103,6 +2444,12 @@ def _display_leaderboard(
     with viz_tab2:
         # Cost analysis
         if matplotlib_available:
+            # Ensure Chinese font is configured
+            try:
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False
+            except Exception:
+                pass
             # Sort by cost (ascending - lowest first)
             sorted_data = sorted(zip(all_metrics, range(len(all_metrics))), 
                                key=lambda x: x[0].avg_cost_per_query)
@@ -2140,6 +2487,12 @@ def _display_leaderboard(
     with viz_tab3:
         # Latency analysis
         if matplotlib_available:
+            # Ensure Chinese font is configured
+            try:
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False
+            except Exception:
+                pass
             # Sort by average latency (ascending - lowest first)
             sorted_data = sorted(zip(all_metrics, range(len(all_metrics))), 
                                key=lambda x: x[0].avg_latency_s)
@@ -2177,6 +2530,12 @@ def _display_leaderboard(
     with viz_tab4:
         # Quality analysis
         if matplotlib_available:
+            # Ensure Chinese font is configured
+            try:
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False
+            except Exception:
+                pass
             # Sort by quality score (descending - highest first)
             sorted_data = sorted(zip(all_metrics, range(len(all_metrics))), 
                                key=lambda x: x[0].avg_quality_score, 
@@ -2195,7 +2554,8 @@ def _display_leaderboard(
             bars = ax.barh(strategy_names, qualities, color=colors)
             ax.set_xlabel('平均质量得分 (%)', fontsize=12, fontweight='bold')
             ax.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax.set_title('质量得分对比（质量越高越好）', fontsize=14, fontweight='bold', pad=20)
+            ax.set_title('平均质量得分对比（质量越高越好）\n注：平均质量得分 = (Faithfulness + Answer Relevancy + Context Precision) / 3', 
+                        fontsize=14, fontweight='bold', pad=20)
             ax.set_xlim(0, 100)
             ax.grid(axis='x', alpha=0.3)
             
@@ -2208,6 +2568,60 @@ def _display_leaderboard(
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
+            
+            # RAGAS detailed metrics comparison (grouped bar chart)
+            st.markdown("#### 📊 RAGAS 详细指标对比")
+            
+            # Filter metrics that have RAGAS data
+            metrics_with_ragas = [
+                m for m in all_metrics 
+                if m.avg_faithfulness is not None or m.avg_answer_relevancy is not None or m.avg_context_precision is not None
+            ]
+            
+            if metrics_with_ragas:
+                # Sort by average quality score
+                sorted_ragas = sorted(metrics_with_ragas, key=lambda x: x.avg_quality_score, reverse=True)
+                
+                fig, ax = plt.subplots(figsize=(14, 8))
+                
+                strategy_names_ragas = [m.strategy_name.replace(" [Benchmark]", "") for m in sorted_ragas]
+                x = np.arange(len(strategy_names_ragas))
+                width = 0.25
+                
+                # Extract RAGAS metrics (convert to percentage, use 0 if None)
+                faithfulness_vals = [(m.avg_faithfulness * 100) if m.avg_faithfulness is not None else 0 
+                                    for m in sorted_ragas]
+                answer_relevancy_vals = [(m.avg_answer_relevancy * 100) if m.avg_answer_relevancy is not None else 0 
+                                        for m in sorted_ragas]
+                context_precision_vals = [(m.avg_context_precision * 100) if m.avg_context_precision is not None else 0 
+                                          for m in sorted_ragas]
+                
+                bars1 = ax.bar(x - width, faithfulness_vals, width, label='Faithfulness (忠实度)', color='#FF6B6B')
+                bars2 = ax.bar(x, answer_relevancy_vals, width, label='Answer Relevancy (答案相关性)', color='#4ECDC4')
+                bars3 = ax.bar(x + width, context_precision_vals, width, label='Context Precision (上下文精确度)', color='#95E1D3')
+                
+                ax.set_xlabel('策略名称', fontsize=12, fontweight='bold')
+                ax.set_ylabel('得分 (%)', fontsize=12, fontweight='bold')
+                ax.set_title('RAGAS 详细指标对比（分数越高越好）', fontsize=14, fontweight='bold', pad=20)
+                ax.set_xticks(x)
+                ax.set_xticklabels(strategy_names_ragas, rotation=45, ha='right')
+                ax.set_ylim(0, 100)
+                ax.legend(loc='upper left')
+                ax.grid(axis='y', alpha=0.3)
+                
+                # Add value labels on bars
+                for bars in [bars1, bars2, bars3]:
+                    for bar in bars:
+                        height = bar.get_height()
+                        if height > 0:
+                            ax.text(bar.get_x() + bar.get_width()/2., height,
+                                   f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
+                
+                plt.tight_layout()
+                st.pyplot(fig, use_container_width=True)
+                plt.close(fig)
+            else:
+                st.info("暂无 RAGAS 详细指标数据。")
             
             # Routing accuracy (if available)
             routing_metrics = [m for m in all_metrics if m.routing_total_accuracy is not None]
@@ -2244,6 +2658,12 @@ def _display_leaderboard(
     with viz_tab5:
         # Runtime analysis
         if matplotlib_available:
+            # Ensure Chinese font is configured
+            try:
+                plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False
+            except Exception:
+                pass
             # Calculate total runtime per strategy (avg_latency * number of queries)
             # We'll use avg_latency_s as proxy, but ideally we'd have actual runtime
             # Sort by average latency (ascending - fastest first)
@@ -2451,6 +2871,9 @@ def _save_benchmark_history(
                     "avg_cost_per_query": m.avg_cost_per_query,
                     "total_cost": m.total_cost,
                     "avg_quality_score": m.avg_quality_score,
+                    "avg_faithfulness": m.avg_faithfulness,
+                    "avg_answer_relevancy": m.avg_answer_relevancy,
+                    "avg_context_precision": m.avg_context_precision,
                     "routing_total_accuracy": m.routing_total_accuracy,
                     "routing_simple_accuracy": m.routing_simple_accuracy,
                     "routing_complex_accuracy": m.routing_complex_accuracy,
@@ -2562,6 +2985,9 @@ def _render_benchmark_history() -> None:
                 avg_cost_per_query=m_data.get("avg_cost_per_query", 0.0),
                 total_cost=m_data.get("total_cost", 0.0),
                 avg_quality_score=m_data.get("avg_quality_score", 0.0),
+                avg_faithfulness=m_data.get("avg_faithfulness"),
+                avg_answer_relevancy=m_data.get("avg_answer_relevancy"),
+                avg_context_precision=m_data.get("avg_context_precision"),
                 routing_total_accuracy=m_data.get("routing_total_accuracy"),
                 routing_simple_accuracy=m_data.get("routing_simple_accuracy"),
                 routing_complex_accuracy=m_data.get("routing_complex_accuracy"),

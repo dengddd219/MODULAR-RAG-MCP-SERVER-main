@@ -26,7 +26,10 @@ class StrategyMetrics:
         avg_tokens_per_query: Average tokens per query
         avg_cost_per_query: Average cost per query in USD
         total_cost: Total cost for all queries in USD
-        avg_quality_score: Average Ragas quality score (0-1)
+        avg_quality_score: Average Ragas quality score (0-1) - average of faithfulness, answer_relevancy, context_precision
+        avg_faithfulness: Average faithfulness score from RAGAS (0-1)
+        avg_answer_relevancy: Average answer relevancy score from RAGAS (0-1)
+        avg_context_precision: Average context precision score from RAGAS (0-1)
         routing_total_accuracy: Total routing accuracy (0-1) or None for single models
         routing_simple_accuracy: Simple intent routing accuracy (0-1) or None
         routing_complex_accuracy: Complex intent routing accuracy (0-1) or None
@@ -40,6 +43,9 @@ class StrategyMetrics:
     total_cost: float
     avg_quality_score: float
     avg_eval_time_s: float = 0.0
+    avg_faithfulness: Optional[float] = None
+    avg_answer_relevancy: Optional[float] = None
+    avg_context_precision: Optional[float] = None
     routing_total_accuracy: Optional[float] = None
     routing_simple_accuracy: Optional[float] = None
     routing_complex_accuracy: Optional[float] = None
