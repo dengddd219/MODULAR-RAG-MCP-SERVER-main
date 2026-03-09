@@ -10,6 +10,7 @@ MCP Server only does retrieval, generation happens at client side.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -118,10 +119,98 @@ class RAGGenerator:
 3. 回答要准确、简洁、有条理
 4. 可以使用 Markdown 格式来组织回答
 5. 在回答中引用文档时，使用 [1], [2] 等标记来引用对应的文档片段
+6. 严格遵循回答语言要求
 
 请开始回答："""
     
-    def _build_context(self, results: List[RetrievalResult]) -> str:
+    def _resolve_target_language(self, query: str) -> str:
+        """Resolve output language from explicit instruction or query language."""
+        explicit = self._extract_explicit_language(query)
+        if explicit:
+            return explicit
+        return self._detect_query_language(query)
+
+    def _extract_explicit_language(self, query: str) -> Optional[str]:
+        """Extract explicit language request from query text."""
+        q = (query or "").strip()
+        if not q:
+            return None
+
+        # Chinese directives: "请用英文回答", "用中文输出"
+        zh_directive = re.search(
+            r"(?:请|请你)?(?:用|使用|以)\s*([A-Za-z\u4e00-\u9fff\-\s]{1,24})\s*(?:回答|回复|输出|作答|说明)",
+            q,
+            flags=re.IGNORECASE,
+        )
+        if zh_directive:
+            return self._normalize_language_name(zh_directive.group(1))
+
+        # English directives: "answer in English", "respond in Chinese"
+        en_directive = re.search(
+            r"(?:answer|respond|reply|write|output)\s+(?:in|using)\s+([A-Za-z\-\s]{2,24})",
+            q,
+            flags=re.IGNORECASE,
+        )
+        if en_directive:
+            return self._normalize_language_name(en_directive.group(1))
+
+        direct_phrases = [
+            ("用英文", "English"),
+            ("用英语", "English"),
+            ("请英文", "English"),
+            ("请英语", "English"),
+            ("用中文", "Chinese"),
+            ("请中文", "Chinese"),
+            ("in english", "English"),
+            ("in chinese", "Chinese"),
+        ]
+        lower_q = q.lower()
+        for phrase, lang in direct_phrases:
+            if phrase in lower_q or phrase in q:
+                return lang
+
+        return None
+
+    def _normalize_language_name(self, raw: str) -> str:
+        token = re.sub(r"\s+", " ", (raw or "").strip().lower())
+        aliases = {
+            "中文": "Chinese",
+            "汉语": "Chinese",
+            "汉语中文": "Chinese",
+            "chinese": "Chinese",
+            "zh": "Chinese",
+            "简体中文": "Chinese",
+            "繁体中文": "Chinese",
+            "英文": "English",
+            "英语": "English",
+            "english": "English",
+            "en": "English",
+        }
+        return aliases.get(token, raw.strip().title())
+
+    def _detect_query_language(self, query: str) -> str:
+        """Auto-detect language from query when no explicit directive is provided."""
+        if not query:
+            return "Chinese"
+        cjk_count = len(re.findall(r"[\u4e00-\u9fff]", query))
+        latin_count = len(re.findall(r"[A-Za-z]", query))
+        return "Chinese" if cjk_count >= latin_count else "English"
+
+    def _build_language_instruction(self, target_language: str) -> str:
+        return (
+            f"\n\n## 回答语言要求\n"
+            f"- 请严格使用 {target_language} 回答。\n"
+            f"- 如果用户问题中显式指定了回答语言，优先遵循用户指定语言。"
+        )
+
+    def _build_system_language_instruction(self, target_language: str) -> str:
+        return (
+            "You must follow this instruction with highest priority: "
+            f"respond entirely in {target_language}. "
+            "If the user explicitly requests a language, follow the user's request."
+        )
+
+    def _build_context(self, results: List[RetrievalResult], target_language: str) -> str:
         """Build context string from retrieval results.
         
         Args:
@@ -131,6 +220,8 @@ class RAGGenerator:
             Formatted context string with citations.
         """
         if not results:
+            if target_language == "English":
+                return "No relevant document content was retrieved."
             return "未找到相关文档内容。"
         
         context_parts = []
@@ -141,9 +232,9 @@ class RAGGenerator:
             
             # Format citation marker
             citation = f"[{idx}]"
-            source_info = f"来源: {source}"
+            source_info = f"Source: {source}" if target_language == "English" else f"来源: {source}"
             if page:
-                source_info += f" (第 {page} 页)"
+                source_info += f" (page {page})" if target_language == "English" else f" (第 {page} 页)"
             
             context_parts.append(f"{citation} {text}\n({source_info})")
         
@@ -151,11 +242,15 @@ class RAGGenerator:
         
         # Truncate if too long
         if len(context) > self.max_context_length:
-            context = context[:self.max_context_length] + "...\n[内容已截断]"
+            context = (
+                context[:self.max_context_length] + "...\n[Content truncated]"
+                if target_language == "English"
+                else context[:self.max_context_length] + "...\n[内容已截断]"
+            )
         
         return context
     
-    def _build_prompt(self, query: str, context: str) -> str:
+    def _build_prompt(self, query: str, context: str, target_language: str) -> str:
         """Build prompt from query and context.
         
         Args:
@@ -165,7 +260,8 @@ class RAGGenerator:
         Returns:
             Complete prompt string.
         """
-        return self.prompt_template.format(query=query, context=context)
+        base_prompt = self.prompt_template.format(query=query, context=context)
+        return base_prompt + self._build_language_instruction(target_language)
     
     def generate(
         self,
@@ -184,9 +280,13 @@ class RAGGenerator:
             Generated answer string from LLM.
         """
         if not query or not query.strip():
-            return "请提供有效的问题。"
+            return "Please provide a valid question." if self._detect_query_language(query) == "English" else "请提供有效的问题。"
         
+        target_language = self._resolve_target_language(query)
+
         if not results:
+            if target_language == "English":
+                return "Sorry, I could not find relevant information in the knowledge base. Please try rephrasing your query or verify ingestion/indexing."
             return "抱歉，我没有在知识库中找到相关信息。请尝试换一个问法或检查知识库是否已正确索引。"
         
         # Dynamic routing logic (if enabled)
@@ -202,14 +302,17 @@ class RAGGenerator:
             effective_llm = self.llm
         
         # Build context
-        context = self._build_context(results)
+        context = self._build_context(results, target_language=target_language)
         
         # Build prompt
-        prompt = self._build_prompt(query, context)
+        prompt = self._build_prompt(query, context, target_language=target_language)
         
         # Call LLM
         try:
-            messages = [Message(role="user", content=prompt)]
+            messages = [
+                Message(role="system", content=self._build_system_language_instruction(target_language)),
+                Message(role="user", content=prompt),
+            ]
             response = effective_llm.chat(messages, trace=trace)
             
             # Extract content
@@ -220,7 +323,7 @@ class RAGGenerator:
             
             if not answer or not answer.strip():
                 logger.warning("LLM returned empty answer")
-                return "抱歉，无法生成回答。请重试。"
+                return "Sorry, I could not generate an answer. Please try again." if target_language == "English" else "抱歉，无法生成回答。请重试。"
             
             return answer.strip()
             
@@ -231,6 +334,7 @@ class RAGGenerator:
             error_msg = str(e)
             model_name = self.settings.llm.model if self.settings else "unknown"
             provider = self.settings.llm.provider if self.settings else "unknown"
+            is_en = target_language == "English"
             
             if "not found" in error_msg.lower() or "404" in error_msg:
                 # Try to get available models if Ollama
@@ -241,7 +345,19 @@ class RAGGenerator:
                     except Exception:
                         available_models = "（无法获取模型列表）"
                 
-                help_text = f"""
+                if is_en:
+                    help_text = f"""
+## ⚠️ LLM Model Not Found
+
+**Configured model**: `{model_name}`  
+**Provider**: `{provider}`
+
+Please verify model availability and configuration.
+
+**Current error**: {error_msg}
+"""
+                else:
+                    help_text = f"""
 ## ⚠️ LLM 模型未找到
 
 **配置的模型**: `{model_name}`  
@@ -271,7 +387,18 @@ class RAGGenerator:
 **当前错误**: {error_msg}
 """
             elif "connection" in error_msg.lower() or "connect" in error_msg.lower():
-                help_text = f"""
+                if is_en:
+                    help_text = f"""
+## ⚠️ Failed to Connect to LLM Service
+
+**Provider**: `{provider}`
+
+Please verify service availability, network, and API key.
+
+**Current error**: {error_msg}
+"""
+                else:
+                    help_text = f"""
 ## ⚠️ 无法连接到 LLM 服务
 
 **Provider**: `{provider}`
@@ -290,7 +417,17 @@ class RAGGenerator:
 **当前错误**: {error_msg}
 """
             else:
-                help_text = f"""
+                if is_en:
+                    help_text = f"""
+## ⚠️ LLM Invocation Failed
+
+**Provider**: `{provider}`  
+**Model**: `{model_name}`
+
+**Error**: {error_msg}
+"""
+                else:
+                    help_text = f"""
 ## ⚠️ LLM 调用失败
 
 **Provider**: `{provider}`  
@@ -302,7 +439,19 @@ class RAGGenerator:
 """
             
             # Fallback: return formatted context with helpful error message
-            return f"""{help_text}
+            return (
+                f"""{help_text}
+
+---
+
+## 📄 Retrieved Context
+
+{context}
+
+**Note**: LLM generation failed, so raw retrieved context is shown above.
+"""
+                if is_en
+                else f"""{help_text}
 
 ---
 
@@ -314,6 +463,7 @@ class RAGGenerator:
 
 **注意**: 由于 LLM 生成失败，以上为原始检索结果。请修复 LLM 配置后重试。
 """
+            )
     
     def _get_available_ollama_models(self) -> str:
         """Get list of available Ollama models.

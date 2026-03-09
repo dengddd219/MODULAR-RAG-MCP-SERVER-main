@@ -79,6 +79,11 @@ BENCHMARK_PROGRESS_FILE = BENCHMARK_PROGRESS_DIR / "benchmark_progress.json"
 BENCHMARK_HISTORY_FILE = BENCHMARK_PROGRESS_DIR / "benchmark_history.jsonl"
 PENDING_BENCHMARK_SAVE_KEY = "llm_arena_pending_benchmark_save"
 
+# LLM Arena legacy scoring weights (pre relative-baseline version)
+ARENA_COST_WEIGHT = 0.33
+ARENA_LATENCY_WEIGHT = 0.33
+ARENA_QUALITY_WEIGHT = 0.34
+
 # Model tier definitions
 # Tier 2: Local SLM models (Ollama)
 # Note: These models need to be downloaded via `ollama pull <model_name>`
@@ -885,6 +890,15 @@ def _evaluate_playground_answer(
         st.error(f"质量评测失败: {e}")
 
 
+def _create_arena_scoring_engine() -> ScoringEngine:
+    """Create scoring engine using legacy LLM Arena weights."""
+    return ScoringEngine(
+        cost_weight=ARENA_COST_WEIGHT,
+        latency_weight=ARENA_LATENCY_WEIGHT,
+        quality_weight=ARENA_QUALITY_WEIGHT,
+    )
+
+
 def _render_exhaustive_benchmark() -> None:
     """Render Module B: Exhaustive Benchmark."""
     st.subheader("📊 Exhaustive Benchmark (批量压测与排行榜)")
@@ -1236,7 +1250,7 @@ def _run_benchmark(
         manager = st.session_state.arena_model_manager
         evaluator = ModelEvaluator()
         ragas_evaluator = RagasEvaluator(settings=settings, fast_mode=fast_mode)
-        scoring_engine = ScoringEngine()
+        scoring_engine = _create_arena_scoring_engine()
         
         # Get all models
         all_models = _get_all_models()
@@ -1992,14 +2006,12 @@ def _display_leaderboard(
     # Display scoring rules and calculation process
     with st.expander("📊 评分规则说明", expanded=False):
         st.markdown("""
-        #### 基线相对评分 + 显著性检验
+        #### 传统综合评分（Min-Max 归一化）
 
-        - 基线策略单项基础分固定为 **80**
-        - 质量指标（越高越好）：`80 * (1 + 相对变化率)`
-        - 逆向指标（时延/成本，越低越好）：`80 * (1 - 相对变化率)`
-        - 综合评分：`质量(60%) + 延迟(30%) + 成本(10%)`
-        - 显著性检验：对每个 Query 的原始分数做配对样本 t 检验（`ttest_rel`）
-        - 显著性标记：`p < 0.01 -> **`，`p < 0.05 -> *`，否则 `ns`
+        - 对成本/延迟/质量分别做 Min-Max 归一化
+        - 成本、延迟是逆向指标（越低越好）
+        - 质量是正向指标（越高越好）
+        - 综合评分 = 加权和（0~100）
         """)
         
         # Show current weights
@@ -2008,7 +2020,6 @@ def _display_leaderboard(
         - 成本权重：{scoring_engine.cost_weight * 100:.1f}%
         - 延迟权重：{scoring_engine.latency_weight * 100:.1f}%
         - 质量权重：{scoring_engine.quality_weight * 100:.1f}%
-        - 路由权重：{scoring_engine.routing_weight * 100:.1f}% (仅双模型策略)
         """)
     
     # Model difference explanation
@@ -2026,17 +2037,8 @@ def _display_leaderboard(
     settings = load_settings()
     benchmark_id = st.session_state.get("benchmark_model_id", _get_benchmark_model_id(settings))
     
-    # Compute relative baseline scores
-    baseline_strategy_name = next(
-        (m.strategy_name for m in all_metrics if "[Benchmark]" in m.strategy_name and " + " not in m.strategy_name),
-        all_metrics[0].strategy_name,
-    )
-    relative_scores = scoring_engine.compute_relative_scores(
-        all_metrics=all_metrics,
-        baseline_strategy_name=baseline_strategy_name,
-    )
     for metrics in all_metrics:
-        metrics.composite_score = float(relative_scores.get(metrics.strategy_name, {}).get("composite_score", 0.0))
+        metrics.composite_score = scoring_engine.compute_composite_score(metrics, all_metrics)
     
     # Sort by composite score
     all_metrics.sort(key=lambda m: getattr(m, "composite_score", 0.0), reverse=True)
@@ -2085,21 +2087,6 @@ def _display_leaderboard(
             "排名": get_chinese_rank(rank),
             "策略名称": strategy_name,
             "综合评分": f"{composite_score:.2f}",
-            "路由总准确率 (%)": (
-                f"{metrics.routing_total_accuracy * 100:.2f}"
-                if metrics.routing_total_accuracy is not None
-                else "N/A"
-            ),
-            "简单意图准确率 (%)": (
-                f"{metrics.routing_simple_accuracy * 100:.2f}"
-                if metrics.routing_simple_accuracy is not None
-                else "N/A"
-            ),
-            "复杂意图准确率 (%)": (
-                f"{metrics.routing_complex_accuracy * 100:.2f}"
-                if metrics.routing_complex_accuracy is not None
-                else "N/A"
-            ),
             "成功率 (%)": f"{metrics.success_rate * 100:.2f}",
             "平均生成时长 (s)": f"{metrics.avg_latency_s:.3f}",
             "平均测评时长 (s)": f"{metrics.avg_eval_time_s:.3f}",
@@ -2299,64 +2286,6 @@ def _display_leaderboard(
                 st.dataframe(comparison_df, width='stretch', use_container_width=True)
                 
                 st.caption("💡 提示：提升百分比中，正数表示改进（成本/延迟降低或质量/评分提高），负数表示下降。")
-    
-    # Relative + significance breakdown
-    st.markdown("#### 📈 详细评分分解")
-    with st.expander("查看基于 Baseline 的差异与显著性", expanded=False):
-        baseline = None
-        for m in all_metrics:
-            if m.strategy_name == baseline_strategy_name:
-                baseline = m
-                break
-        if baseline is None:
-            st.info("未找到基线策略，无法做显著性对比。")
-        else:
-            def _sig(p: float) -> tuple[str, str]:
-                if p < 0.01:
-                    return "**", "极显著"
-                if p < 0.05:
-                    return "*", "显著"
-                return "ns", "不显著"
-
-            def _pct(base: float, cur: float) -> float:
-                if abs(base) <= 1e-12:
-                    return 0.0
-                return (cur - base) / abs(base) * 100.0
-
-            for m in all_metrics:
-                if m.strategy_name == baseline.strategy_name:
-                    continue
-                pvals = relative_scores.get(m.strategy_name, {}).get("p_values", {})
-                st.markdown(f"##### {m.strategy_name}")
-
-                cp_delta = _pct(baseline.avg_context_precision or 0.0, m.avg_context_precision or 0.0)
-                cp_arrow = "🟢" if cp_delta >= 0 else "🔴"
-                cp_trend = "提升" if cp_delta >= 0 else "下降"
-                cp_mark, cp_desc = _sig(float(pvals.get("context_precision", 1.0)))
-                st.markdown(
-                    f"- Context Precision: {(baseline.avg_context_precision or 0.0):.3f} vs {(m.avg_context_precision or 0.0):.3f} | "
-                    f"{cp_trend} {abs(cp_delta):.1f}% {cp_arrow} | p-value: {float(pvals.get('context_precision', 1.0)):.3f} {cp_mark} ({cp_desc}{'提升' if cp_delta >= 0 else '下降'})"
-                )
-
-                lat_delta = _pct(baseline.avg_latency_s, m.avg_latency_s)
-                lat_arrow = "🟢" if lat_delta <= 0 else "🔴"
-                lat_trend = "变快" if lat_delta <= 0 else "变慢"
-                lat_mark, lat_desc = _sig(float(pvals.get("latency", 1.0)))
-                st.markdown(
-                    f"- End-to-End Latency: {baseline.avg_latency_s:.3f}s vs {m.avg_latency_s:.3f}s | "
-                    f"{lat_trend} {abs(lat_delta):.1f}% {lat_arrow} | p-value: {float(pvals.get('latency', 1.0)):.3f} {lat_mark} ({'差异不显著' if lat_mark == 'ns' else lat_desc + ('变快' if lat_delta <= 0 else '变慢')})"
-                )
-
-                faith_delta = _pct(baseline.avg_faithfulness or 0.0, m.avg_faithfulness or 0.0)
-                faith_arrow = "🟢" if faith_delta >= 0 else "🔴"
-                faith_trend = "提升" if faith_delta >= 0 else "下降"
-                faith_mark, faith_desc = _sig(float(pvals.get("faithfulness", 1.0)))
-                st.markdown(
-                    f"- Faithfulness: {(baseline.avg_faithfulness or 0.0):.3f} vs {(m.avg_faithfulness or 0.0):.3f} | "
-                    f"{faith_trend} {abs(faith_delta):.1f}% {faith_arrow} | p-value: {float(pvals.get('faithfulness', 1.0)):.3f} {faith_mark} ({faith_desc}{'提升' if faith_delta >= 0 else '下降'})"
-                )
-
-                st.divider()
     
     # Visualization section
     st.markdown("#### 📊 可视化分析")
@@ -2614,37 +2543,7 @@ def _display_leaderboard(
             else:
                 st.info("暂无 RAGAS 详细指标数据。")
             
-            # Routing accuracy (if available)
-            routing_metrics = [m for m in all_metrics if m.routing_total_accuracy is not None]
-            if routing_metrics:
-                # Sort by routing accuracy (descending - highest first)
-                sorted_routing = sorted(routing_metrics, 
-                                      key=lambda x: x.routing_total_accuracy or 0, 
-                                      reverse=True)
-                
-                st.markdown("##### 路由准确率分析（仅双模型策略）")
-                fig, ax = plt.subplots(figsize=(12, 6))
-                
-                rout_names = [m.strategy_name.replace(" [Benchmark]", "") for m in sorted_routing]
-                rout_accs = [m.routing_total_accuracy * 100 for m in sorted_routing]
-                rout_colors = ['#FF8C00' if '[Benchmark]' in m.strategy_name and ' + ' not in m.strategy_name else '#4A90E2' 
-                              for m in sorted_routing]
-                
-                bars = ax.barh(rout_names, rout_accs, color=rout_colors)
-                ax.set_xlabel('路由准确率 (%)', fontsize=12, fontweight='bold')
-                ax.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-                ax.set_title('路由准确率对比（准确率越高越好）', fontsize=14, fontweight='bold', pad=20)
-                ax.set_xlim(0, 100)
-                ax.grid(axis='x', alpha=0.3)
-                
-                for bar, acc in zip(bars, rout_accs):
-                    width = bar.get_width()
-                    ax.text(width + 1, bar.get_y() + bar.get_height()/2,
-                           f'{acc:.2f}%', ha='left', va='center', fontweight='bold')
-                
-                plt.tight_layout()
-                st.pyplot(fig, use_container_width=True)
-                plt.close(fig)
+            # Route-accuracy plots intentionally removed from leaderboard analytics.
     
     with viz_tab5:
         # Runtime analysis
@@ -2908,14 +2807,9 @@ def _save_completed_progress_to_history(progress_data: Dict[str, Any]) -> None:
         all_strategies.append((name, s.get("small_model"), large))
 
     final_metrics = _compute_aggregated_metrics(strategy_results, test_cases)
-    scoring_engine = ScoringEngine()
-    baseline_name = next(
-        (m.strategy_name for m in final_metrics if "[Benchmark]" in m.strategy_name and " + " not in m.strategy_name),
-        final_metrics[0].strategy_name if final_metrics else "",
-    )
-    relative_scores = scoring_engine.compute_relative_scores(final_metrics, baseline_name)
+    scoring_engine = _create_arena_scoring_engine()
     for metrics in final_metrics:
-        metrics.composite_score = float(relative_scores.get(metrics.strategy_name, {}).get("composite_score", 0.0))  # type: ignore[attr-defined]
+        metrics.composite_score = scoring_engine.compute_composite_score(metrics, final_metrics)  # type: ignore[attr-defined]
 
     _save_benchmark_history(
         strategy_results=strategy_results,
@@ -3038,7 +2932,7 @@ def _render_benchmark_history() -> None:
         
         # Display leaderboard and visualizations
         if reconstructed_metrics:
-            scoring_engine = ScoringEngine()
+            scoring_engine = _create_arena_scoring_engine()
             _display_leaderboard(reconstructed_metrics, scoring_engine)
         else:
             st.warning("⚠️ 该历史记录中没有可显示的评估结果。")

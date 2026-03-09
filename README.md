@@ -16,6 +16,7 @@ cd MODULAR-RAG-MCP-SERVER-main
 python -m venv .venv
 # Windows PowerShell:
 .\.venv\Scripts\Activate.ps1
+python scripts/start_dashboard.py
 # Linux/macOS:
 # source .venv/bin/activate
 

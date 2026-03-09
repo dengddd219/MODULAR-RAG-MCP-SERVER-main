@@ -1,182 +1,173 @@
 # 项目技术亮点清单（Modular RAG MCP Server）
 
-> 从 DEV_SPEC 与源码提炼，供简历编写时按需选取。每个亮点附带"简历话术方向"和"可量化角度"。
+> 基于当前 `DEV_SPEC`、`README` 与项目现状整理，供简历编写时按需选取。每个亮点附带"简历话术方向"和"可量化角度"，尽量优先使用当前版本已落地的能力，避免写成过时版本。
 
 ---
 
-## 亮点 1：多阶段混合检索架构（Hybrid Search + Rerank）
+## 亮点 1：三路混合检索架构（Dense + Sparse + Graph + Rerank）
 
 **技术要点**：
-- 设计并实现"粗排召回 → 精排重排"两段式检索架构
-- 粗排阶段并行执行 Dense Retrieval（语义向量，Cosine Similarity）+ Sparse Retrieval（BM25 关键词匹配）
-- 通过 RRF（Reciprocal Rank Fusion）算法融合双路结果，平衡查准率与查全率
-- 精排阶段支持 Cross-Encoder 本地模型 / LLM Rerank / None 三种模式可插拔切换
-- 精排失败时自动回退至融合排名（Graceful Fallback），保障系统可用性
+- 将 Hybrid Search 从传统双路检索升级为三路召回：Dense Retrieval + Sparse Retrieval（BM25）+ Graph Retriever
+- 融合层支持动态多路 RRF（Reciprocal Rank Fusion），不依赖不同检索分数的绝对值标尺
+- 检索后提供可插拔精排：`Cross-Encoder` / `LLM Rerank` / `None`
+- 当精排超时、失败或关闭时自动回退到融合排序，保证主链路稳定可用
+- 评估与可视化面板同步支持二路、三路及二路 vs 三路对比
 
 **简历话术方向**：
-- "设计并实现了 Hybrid Search 混合检索引擎，结合 BM25 稀疏检索与 Dense Embedding 稠密检索，通过 RRF 融合算法实现查准率与查全率的平衡"
-- "引入 Cross-Encoder Rerank 精排模块，在不牺牲响应速度的前提下将 Top-K 检索精准度提升 XX%"
+- "主导实现多路混合检索架构，将 RAG 召回从 Dense+BM25 双路扩展到 Dense+Sparse+Graph 三路，并通过动态 RRF 融合提升复杂知识场景下的召回覆盖率"
+- "设计'粗排召回 -> 精排重排'两阶段检索链路，支持 Cross-Encoder / LLM Rerank 可插拔切换，并通过失败回退机制保障线上稳定性"
 
-**可量化角度**：Hit Rate@K、MRR、NDCG、Rerank 前后 Top-1 命中率变化、端到端查询延迟
+**可量化角度**：Hit Rate@K、MRR、NDCG、三路相对二路的提升幅度、Rerank 前后 Top-1 命中率、查询延迟
 
 ---
 
-## 亮点 2：全链路可插拔架构（Factory + 配置驱动）
+## 亮点 2：智能查询路由网关（Spam Gate + Intent Router + Complexity Routing）
 
 **技术要点**：
-- 为 LLM / Embedding / Splitter / VectorStore / Reranker / Evaluator 六大组件定义统一抽象接口（Base 类）
-- 采用工厂模式（Factory Pattern）+ YAML 配置驱动，实现"改配置不改代码"的组件切换
-- LLM Provider 支持 Azure OpenAI / OpenAI / Ollama / DeepSeek 四种后端
-- Embedding 支持 OpenAI / Azure / Ollama 三种后端
-- 向量数据库接口预留扩展（当前默认 Chroma，可切换 Qdrant/Pinecone）
-- Vision LLM 独立抽象（BaseVisionLLM），支持多模态图像处理
+- 在 Query Engine 前置轻量垃圾拦截与安全网关，过滤无意义输入、恶意试探与纯闲聊流量
+- 引入本地意图路由能力，支持业务意图识别并驱动不同检索/应答策略
+- 新增本地 Query Complexity Classifier，为"简单问题走小模型、复杂问题走大模型"提供路由信号
+- 查询侧过滤条件支持 `collection`、`doc_type`、`doc_intent` 等结构化约束
+- Chat 页面只暴露 `快速 / 思考 / Pro` 三档模式，底层模型映射由系统根据基准结果动态管理
 
 **简历话术方向**：
-- "设计了全链路可插拔架构，基于抽象接口 + 工厂模式 + 配置驱动，实现 LLM/Embedding/VectorStore 等 6 大核心组件的零代码热切换"
-- "架构支持 Azure OpenAI、本地 Ollama 等多种 Provider 无缝切换，满足企业合规与成本优化需求"
+- "设计了面向 RAG 的智能查询网关，在检索前完成垃圾拦截、意图识别与复杂度分类，降低无效流量消耗并支撑模型路由决策"
+- "将用户侧交互抽象为'快速/思考/Pro'三档模式，屏蔽底层模型复杂度，并基于离线评测结果动态调整后端路由"
 
-**可量化角度**：支持 N 种 LLM Provider、N 种 Embedding 后端、配置切换零代码修改
+**可量化角度**：垃圾流量拦截率、不同意图的分类准确率、简单/复杂问题路由占比、平均推理成本与延迟变化
 
 ---
 
-## 亮点 3：智能数据摄取流水线（Ingestion Pipeline）
+## 亮点 3：全链路可插拔架构（抽象接口 + 工厂模式 + 配置驱动）
 
 **技术要点**：
-- 自研五阶段流水线：Load → Split → Transform → Embed → Upsert
-- PDF 解析采用 MarkItDown 转 canonical Markdown，保留文档结构
-- 使用 LangChain RecursiveCharacterTextSplitter 进行语义感知切分
-- Transform 阶段包含三个 LLM 增强步骤：
-  - ChunkRefiner：LLM 驱动的 Chunk 智能重组与去噪
-  - MetadataEnricher：自动生成 Title/Summary/Tags 语义元数据
-  - ImageCaptioner：Vision LLM 生成图片描述，实现"搜文出图"
-- SHA256 文件哈希 + 内容哈希实现增量摄取与幂等 Upsert
-- 双路向量化：Dense（OpenAI Embedding）+ Sparse（BM25）并行编码
+- 为 LLM、Embedding、Vision LLM、Splitter、Vector Store、Reranker、Evaluator 等核心组件定义统一抽象接口
+- 采用工厂模式与 `settings.yaml` 配置驱动，实现"改配置不改代码"的 Provider 切换
+- LLM 已支持 Azure OpenAI / OpenAI / Ollama / DeepSeek，多种部署形态可无缝切换
+- Embedding 支持 Azure / OpenAI / Ollama，向量存储当前落地 Chroma，并预留后续扩展能力
+- Prompt 模板外置到 `config/prompts/`，便于独立迭代与 A/B 调整
 
 **简历话术方向**：
-- "设计并实现了五阶段智能数据摄取流水线，整合文档解析、语义切分、LLM 增强（智能重组/元数据注入/图片描述）、双路向量化与幂等存储"
-- "实现基于 SHA256 哈希的增量摄取机制，避免重复处理，降低 API 调用成本 XX%"
+- "搭建了面向 RAG 的全链路可插拔架构，通过抽象接口 + 工厂模式 + 配置驱动，实现模型、检索、切分、评估等核心模块的零代码切换"
+- "统一封装云端与本地 LLM/Embedding Provider，兼顾企业合规、成本优化与私有化部署诉求"
 
-**可量化角度**：处理文档数、生成 Chunk 数、增量摄取跳过率、LLM 增强覆盖率、端到端摄取耗时
+**可量化角度**：支持的 Provider 数量、可插拔组件数、配置切换耗时、A/B 实验迭代次数
 
 ---
 
-## 亮点 4：MCP 协议集成（Model Context Protocol）
+## 亮点 4：智能数据摄取流水线（Load -> Split -> Transform -> Embed -> Upsert）
 
 **技术要点**：
-- 遵循 MCP 标准（JSON-RPC 2.0 + Stdio Transport）实现知识检索 Server
-- 暴露 3 个标准 Tool：query_knowledge_hub / list_collections / get_document_summary
-- 支持 GitHub Copilot、Claude Desktop 等主流 MCP Client 即插即用
-- 返回格式支持 TextContent + ImageContent 多模态内容，含结构化 Citation 引用
-- Stdio Transport 零配置、零网络依赖，天然适合私有知识库场景
+- 自研五阶段 Ingestion Pipeline，支持 CLI、Dashboard、离线批处理等多入口复用
+- Loader 当前已支持 PDF 与 Markdown，PDF 通过 MarkItDown 转 canonical Markdown，Markdown 原生接入
+- 使用 `RecursiveCharacterTextSplitter` 做结构感知切分，尽量保留标题、段落、列表、代码块语义边界
+- Transform 阶段集成 Chunk Refiner、Metadata Enricher、Image Captioner 等增强步骤
+- 通过文件 SHA256 与内容哈希实现增量摄取、重复跳过与幂等 Upsert
+- Pipeline 支持 `on_progress` 回调，可直接驱动前端实时进度展示
 
 **简历话术方向**：
-- "基于 MCP（Model Context Protocol）标准实现知识检索 Server，支持 GitHub Copilot / Claude Desktop 等 AI Agent 直接调用私有知识库"
-- "实现引用透明的结构化响应（Citation），支持文本 + 图像多模态返回，增强 AI 输出的可信度"
+- "实现统一可观测的数据摄取流水线，覆盖文档解析、语义切分、LLM 增强、双路编码与幂等上载，支撑本地知识库的持续更新"
+- "基于文件哈希与内容哈希设计增量摄取机制，避免重复解析和重复向量化，显著降低离线处理成本"
 
-**可量化角度**：支持 N 种 MCP Client、工具调用成功率、端到端响应延迟
+**可量化角度**：处理文档数、Chunk 产出量、重复文件跳过率、摄取吞吐、单文档处理耗时
 
 ---
 
-## 亮点 5：多模态图像处理（Image-to-Text）
+## 亮点 5：文档级意图标注与按意图分库视图
 
 **技术要点**：
-- 采用 Image-to-Text 策略，复用纯文本 RAG 链路实现多模态检索
-- Loader 阶段自动提取 PDF 图片并插入占位符标记
-- Transform 阶段调用 Vision LLM（GPT-4o）生成结构化图片描述（Caption）
-- 描述文本注入 Chunk 正文，被 Embedding 覆盖后可通过自然语言检索图片
-- 检索命中后动态读取原始图片、编码 Base64 返回 MCP Client
+- 在摄取阶段复用本地分类模型，对整篇文档生成统一 `doc_intent` 标签
+- 将意图标签写入所有 Chunk 的元数据，支持查询阶段按业务意图做精准过滤
+- 自动构建 `data/documents_by_intent/{intent}/{collection}/` 物理视图，便于人工巡检和运营协作
+- 形成"摄取侧意图标注 + 查询侧意图过滤"闭环，增强业务场景下的检索可控性
 
 **简历话术方向**：
-- "设计 Image-to-Text 多模态处理方案，利用 Vision LLM 将文档图片转化为语义描述并嵌入检索链路，实现'搜文出图'能力"
-- "无需引入 CLIP 等多模态向量库，复用纯文本 RAG 架构即可支持图像检索，降低架构复杂度"
+- "将文档级意图识别前移到数据摄取阶段，为每篇文档打上统一业务标签，并在查询阶段通过元数据过滤实现意图级精准召回"
+- "设计按意图划分的原始文档视图，让算法标签结果可被产品、运营和开发共同巡检，提高 RAG 数据治理能力"
 
-**可量化角度**：处理图片数、图片描述平均长度、图片相关查询命中率
+**可量化角度**：意图类别数、带标签文档占比、意图过滤命中率、标注一致性
 
 ---
 
-## 亮点 6：全链路可观测性与可视化管理平台
+## 亮点 6：MCP 标准集成与 Agent 可调用能力
 
 **技术要点**：
-- 设计双链路追踪体系：Ingestion Trace（5 阶段）+ Query Trace（5 阶段）
-- TraceContext 显式调用模式，低侵入记录各阶段耗时、候选数量、分数分布
-- JSON Lines 结构化日志持久化，零外部依赖（无 LangSmith/LangFuse）
-- 基于 Streamlit 构建六页面管理平台：
-  - 系统总览（组件配置 + 数据资产统计）
-  - 数据浏览器（文档/Chunk/图片详情查看)
-  - Ingestion 管理（文件上传、实时进度条、文档删除）
-  - Ingestion 追踪（阶段耗时瀑布图）
-  - Query 追踪（Dense/Sparse 对比、Rerank 前后变化）
-  - 评估面板（Ragas 指标、历史趋势）
-- Dashboard 基于 Trace 中 method/provider 字段动态渲染，更换组件后自动适配
+- 遵循 MCP 标准，以 JSON-RPC 2.0 + Stdio Transport 方式实现本地知识检索服务
+- 对外暴露 `query_knowledge_hub`、`list_collections`、`get_document_summary` 三个标准工具
+- 支持 GitHub Copilot、Claude Desktop 等 MCP Client 即插即用
+- 返回内容支持文本与图像两类内容，并附带结构化 Citation 信息
+- 采用本地 stdio 通信，无需额外服务端口与网络暴露，适合私有知识库和桌面端集成
 
 **简历话术方向**：
-- "构建全链路白盒化追踪体系（Ingestion + Query 双链路），每次检索过程透明可回溯，支持精准定位坏 Case"
-- "基于 Streamlit 实现六页面可视化管理平台，涵盖数据浏览、摄取管理、追踪分析、评估面板，实现 RAG 系统的全生命周期管理"
+- "基于 MCP 标准实现知识检索 Server，使 GitHub Copilot、Claude Desktop 等 AI 助手可直接调用私有知识库"
+- "设计带引用的结构化工具返回，兼容文本与图像内容，提升 AI 输出的可溯源性与可信度"
 
-**可量化角度**：追踪覆盖阶段数、Dashboard 页面数、追踪日志条数、问题定位效率提升
+**可量化角度**：MCP 工具数、客户端适配数、工具调用成功率、端到端响应延迟
 
 ---
 
-## 亮点 7：自动化评估体系
+## 亮点 7：多模态 Image-to-Text 检索方案
 
 **技术要点**：
-- 可插拔评估框架：Ragas（Faithfulness/Answer Relevancy/Context Precision）+ 自定义指标（Hit Rate/MRR）
-- CompositeEvaluator 支持多评估器并行执行与结果汇总
-- EvalRunner 基于 Golden Test Set 进行回归评估
-- 评估历史持久化，支持策略调整前后的量化对比
-- 评估面板可视化展示指标趋势
+- 采用 Image-to-Text 思路处理文档图片，避免引入额外的多模态向量库复杂度
+- Loader 阶段提取图片引用，Transform 阶段使用 Vision LLM 生成结构化 Caption
+- Caption 被注入到 Chunk 正文/Metadata 并进入统一检索空间，实现"搜文出图"
+- 检索命中图片后，可读取本地图片并以 Base64 形式返回给 MCP Client 或 UI
+- 该方案兼容现有文本检索链路，适合流程图、截图、图表等文档型图片场景
 
 **简历话术方向**：
-- "建立基于 Ragas + 自定义指标的自动化评估闭环，拒绝'凭感觉调优'，每次策略调整都有量化分数支撑"
-- "集成 Golden Test Set 回归测试，确保检索质量基线稳定（Hit Rate@K ≥ 90%, MRR ≥ 0.8）"
+- "设计并落地 Image-to-Text 多模态检索方案，通过 Vision LLM 将图片语义映射到文本检索空间，在不重构主架构的前提下实现图文统一检索"
+- "将图片描述与文本 Chunk 统一索引，使用户可通过自然语言检索文档中的图表、截图与流程图"
 
-**可量化角度**：评估指标数、测试集规模、Hit Rate/MRR/Faithfulness 具体数值
+**可量化角度**：处理图片数、Caption 覆盖率、图片相关查询命中率、图文混合查询占比
 
 ---
 
-## 亮点 8：文档生命周期管理（DocumentManager）
+## 亮点 8：八页面可观测性平台（Dashboard + Chat + LLM Arena）
 
 **技术要点**：
-- DocumentManager 独立于 Pipeline，负责跨 4 个存储的协调操作
-- 支持文档列表、详情查看、协调删除（Chroma + BM25 + ImageStorage + FileIntegrity 四路同步）
-- Pipeline 支持 on_progress 回调，Dashboard 实时展示各阶段进度条
-- 幂等 Upsert 设计：chunk_id = hash(source_path + section_path + content_hash)
+- 基于 Streamlit 构建 8 页面管理平台：Overview、Chat、Data Browser、Ingestion Manager、Ingestion Traces、Query Traces、Evaluation Panel、LLM Arena
+- 构建 Ingestion Trace + Query Trace 双链路白盒追踪，记录阶段耗时、候选数量、排序变化等中间状态
+- Chat 页面在 Dashboard 内完成完整 RAG 闭环，支持会话持久化、引用折叠展示、运行时间展示与中英文引用文案自适应
+- LLM Arena 支持单次交互测试与批量压测，提供动态排行榜、历史记录、进度恢复、质量/延迟/成本对比
+- 页面渲染依赖 Trace 中的 `method` / `provider` 字段，更换底层组件后 UI 可自动适配
 
 **简历话术方向**：
-- "实现跨存储协调的文档生命周期管理，支持 Chroma/BM25/图片/处理记录四路同步删除，保障数据一致性"
+- "从 0 到 1 搭建 RAG 可观测性平台，以 8 页面 Dashboard 打通数据管理、链路追踪、在线对话、评估分析与模型压测"
+- "通过白盒 Trace + 可视化分析，把 RAG 系统从黑盒问答升级为可定位、可解释、可调优的工程系统"
 
-**可量化角度**：管理文档数、跨存储操作成功率、删除操作耗时
+**可量化角度**：Dashboard 页面数、Trace 覆盖阶段数、历史运行记录数、问题定位耗时缩短比例
 
 ---
 
-## 亮点 9：工程化实践
+## 亮点 9：自动化评估与 Benchmark 闭环
 
 **技术要点**：
-- TDD 开发：1198+ 单元测试 + 30 E2E 测试全绿
-- 9 个开发阶段、68 个子任务全部完成
-- 分层测试金字塔：Unit → Integration → E2E
-- SQLite 轻量持久化（ingestion_history + image_index + BM25 索引），零外部数据库依赖
-- 配置驱动的零代码组件切换
-- Prompt 模板外置（config/prompts/），支持独立迭代
+- 集成 Ragas 与自定义指标，支持 Faithfulness、Answer Relevancy、Context Precision、Hit Rate、MRR 等评估维度
+- Evaluation Panel 支持历史记录查看、历史重算、细节展示与结果对比图
+- LLM Arena 支持批量策略评测、历史结果持久化、断点续跑与排行榜展示
+- 最近版本统一采用质量/延迟/成本三维综合评分口径，便于不同策略横向比较
+- 支持二路检索、三路检索及不同模型路由策略的量化对比，形成策略迭代闭环
 
 **简历话术方向**：
-- "遵循 TDD 开发范式，累计编写 1200+ 自动化测试用例，覆盖单元/集成/E2E 三层"
-- "采用 SQLite Local-First 持久化方案，零外部数据库依赖，pip install 即可运行"
+- "搭建自动化评估与 Benchmark 闭环，将 Ragas 指标、自定义检索指标与成本/延迟分析统一到同一评测体系中，避免凭经验调参"
+- "为模型路由和检索策略提供历史可追溯的排行榜与对比分析，使每次架构调整都有量化依据"
 
-**可量化角度**：测试用例数、代码覆盖率、开发阶段数、子任务完成率
+**可量化角度**：评估指标数、测试集规模、历史运行次数、不同策略的综合评分差异
 
 ---
 
-## 亮点 10：Agent 扩展性（面向 Agent 方向的延伸叙事）
+## 亮点 10：Local-First 工程化与文档生命周期管理
 
 **技术要点**：
-- MCP Server 天然支持 Agent 调用（Tool Calling 范式）
-- 系统可作为知识检索 Agent 嵌入 Multi-Agent 体系
-- 支持构建自定义 Agent Client（ReAct / Chain of Thought 模式）
-- 可快速适配不同业务场景（替换数据源、调整检索策略、定制 Prompt）
+- 采用 SQLite 持久化 `ingestion_history`、`image_index` 等关键索引信息，保持零外部数据库依赖
+- DocumentManager 独立协调文档列表、详情查看、跨存储删除等生命周期操作
+- 删除流程覆盖 Chroma、BM25、Image Storage、File Integrity 四类存储，保证状态一致性
+- Chat 会话历史本地持久化，LLM Arena 压测进度与历史结果可恢复
+- 保持本地优先、低部署成本的工程风格，便于个人项目展示、教学演示与快速落地
 
-**简历话术方向**（适用于偏 Agent 方向的岗位）：
-- "基于 MCP 协议构建知识检索 Agent，支持 Tool Calling / ReAct 模式，可嵌入 Multi-Agent 协作系统"
-- "设计通用化知识检索框架，支持快速适配不同业务场景（替换数据源 + 调整检索策略 + 定制 Prompt），作为 Agent 生态的知识中枢"
+**简历话术方向**：
+- "采用 Local-First 工程设计，通过 SQLite + 本地文件系统实现摄取历史、图片索引、聊天记录与评测历史持久化，做到低依赖、易部署、易演示"
+- "实现跨多存储的一致性文档生命周期管理，支持文档浏览、详情查看、同步删除与重新摄取"
 
-**可量化角度**：支持的 Agent Client 数量、业务场景适配数
+**可量化角度**：外部基础设施依赖数、跨存储协调操作数、删除成功率、环境搭建时长

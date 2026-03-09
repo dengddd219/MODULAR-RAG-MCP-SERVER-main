@@ -14,6 +14,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import json
@@ -23,10 +24,66 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
+CHAT_MODE_OPTIONS = ["快速", "思考", "Pro"]
+
 
 # ── Chat history persistence ──────────────────────────────────────────────
 
 _CHAT_STORAGE_PATH = Path("data/chat/conversations.json")
+
+
+def _resolve_ui_language(query: str) -> str:
+    """Resolve UI language from explicit directive or query language.
+
+    Returns:
+        "English" or "Chinese".
+    """
+    q = (query or "").strip()
+    if not q:
+        return "Chinese"
+
+    # Chinese directives, e.g. "请用英文回答"
+    zh_directive = re.search(
+        r"(?:请|请你)?(?:用|使用|以)\s*([A-Za-z\u4e00-\u9fff\-\s]{1,24})\s*(?:回答|回复|输出|作答|说明)",
+        q,
+        flags=re.IGNORECASE,
+    )
+    if zh_directive:
+        token = zh_directive.group(1).strip().lower()
+        if token in {"英文", "英语", "english", "en"}:
+            return "English"
+        if token in {"中文", "汉语", "chinese", "zh", "简体中文", "繁体中文"}:
+            return "Chinese"
+
+    # English directives, e.g. "answer in English"
+    en_directive = re.search(
+        r"(?:answer|respond|reply|write|output)\s+(?:in|using)\s+([A-Za-z\-\s]{2,24})",
+        q,
+        flags=re.IGNORECASE,
+    )
+    if en_directive:
+        token = en_directive.group(1).strip().lower()
+        if token in {"english", "en"}:
+            return "English"
+        if token in {"chinese", "zh"}:
+            return "Chinese"
+
+    lower_q = q.lower()
+    if any(p in lower_q for p in ("in english", "use english", "answer in english")):
+        return "English"
+    if any(p in lower_q for p in ("in chinese", "use chinese", "answer in chinese")):
+        return "Chinese"
+
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", q))
+    latin_count = len(re.findall(r"[A-Za-z]", q))
+    return "Chinese" if cjk_count >= latin_count else "English"
+
+
+def _citation_label(count: int, ui_language: str) -> str:
+    """Build citations expander label in target language."""
+    if ui_language == "English":
+        return f"📚 Sources ({count})"
+    return f"📚 引用来源（{count}）"
 
 
 def _ensure_storage_dir() -> None:
@@ -151,11 +208,8 @@ def _initialize_session_state() -> None:
         _initialize_chat_models()
     
     # Initialize selected model (default to benchmark model)
-    if "selected_chat_model" not in st.session_state:
-        from src.core.settings import load_settings
-        settings = load_settings()
-        benchmark_id = _get_benchmark_model_id(settings)
-        st.session_state.selected_chat_model = benchmark_id
+    if "selected_chat_mode" not in st.session_state:
+        st.session_state.selected_chat_mode = "快速"
 
 
 def _get_current_conversation() -> Optional[Dict[str, Any]]:
@@ -257,6 +311,44 @@ def _initialize_chat_models() -> None:
     except Exception as e:
         logger.error(f"Failed to initialize chat models: {e}")
         st.error(f"模型初始化失败: {e}")
+
+
+def _pick_model_id_for_mode(query: str) -> Optional[str]:
+    """Resolve concrete model ID from UI mode and query complexity."""
+    manager = st.session_state.get("chat_model_manager")
+    if manager is None:
+        return None
+
+    all_models = manager.list_models()
+    if not all_models:
+        return None
+
+    selected_mode = st.session_state.get("selected_chat_mode", "快速")
+    benchmark_id = st.session_state.get("benchmark_model_id")
+
+    def _match_id(keywords: List[str]) -> Optional[str]:
+        for m in all_models:
+            haystack = f"{m.model_id} {m.display_name} {m.model_name}".lower()
+            if all(k.lower() in haystack for k in keywords):
+                return m.model_id
+        return None
+
+    gpt4o_mini_id = _match_id(["gpt", "4o", "mini"]) or benchmark_id or all_models[0].model_id
+    qwen_05b_id = _match_id(["qwen2.5", "0.5b"]) or _match_id(["qwen", "0.5b"])
+
+    if selected_mode in ("快速", "Pro"):
+        return gpt4o_mini_id
+
+    # 思考模式: simple query -> qwen 0.5b, complex query -> gpt-4o-mini
+    query_text = (query or "").strip().lower()
+    complex_signals = [
+        "why", "compare", "tradeoff", "architecture", "design", "deep",
+        "原理", "对比", "架构", "设计", "原因", "深入", "分析",
+    ]
+    looks_complex = len(query_text) >= 40 or any(sig in query_text for sig in complex_signals)
+    if (not looks_complex) and qwen_05b_id:
+        return qwen_05b_id
+    return gpt4o_mini_id
 
 
 def _create_new_conversation() -> str:
@@ -492,62 +584,20 @@ def render() -> None:
             _load_conversation(conv["id"])
             st.rerun()
     
-    # Sidebar: Model selection
+    # Sidebar: Mode selection
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**模型选择**")
-    
-    if "chat_model_manager" in st.session_state:
-        manager = st.session_state.chat_model_manager
-        all_models = manager.list_models()
-        benchmark_id = st.session_state.get("benchmark_model_id")
-        
-        # Format model options with benchmark marker
-        model_options = []
-        model_id_map = {}
-        for m in all_models:
-            display_name = m.display_name
-            if m.model_id == benchmark_id:
-                # Ensure benchmark marker is present
-                if "[Benchmark]" not in display_name:
-                    display_name = f"{display_name} [Benchmark]"
-            model_options.append(display_name)
-            model_id_map[display_name] = m.model_id
-        
-        # Get current selected model
-        current_model_id = st.session_state.get("selected_chat_model")
-        current_display = None
-        for m in all_models:
-            if m.model_id == current_model_id:
-                current_display = m.display_name
-                if m.model_id == benchmark_id and "[Benchmark]" not in current_display:
-                    current_display = f"{current_display} [Benchmark]"
-                break
-        
-        if current_display is None or current_display not in model_options:
-            current_display = model_options[0] if model_options else None
-        
-        # Model selector
-        try:
-            default_index = model_options.index(current_display) if current_display and model_options else 0
-        except ValueError:
-            default_index = 0
-        
-        selected_display = st.sidebar.selectbox(
-            "选择生成模型",
-            options=model_options,
-            index=default_index,
-            key="chat_model_selector",
-            help="选择用于RAG最终生成环节的大模型",
-        )
-        
-        # Update selected model ID
-        if selected_display in model_id_map:
-            selected_model_id = model_id_map[selected_display]
-            if st.session_state.get("selected_chat_model") != selected_model_id:
-                st.session_state.selected_chat_model = selected_model_id
-                logger.info(f"Model changed to: {selected_model_id}")
-    else:
-        st.sidebar.warning("模型管理器未初始化")
+    st.sidebar.markdown("**回答模式**")
+    default_mode = st.session_state.get("selected_chat_mode", "快速")
+    mode_index = CHAT_MODE_OPTIONS.index(default_mode) if default_mode in CHAT_MODE_OPTIONS else 0
+    selected_mode = st.sidebar.selectbox(
+        "选择模式",
+        options=CHAT_MODE_OPTIONS,
+        index=mode_index,
+        key="chat_mode_selector",
+        help="仅暴露模式，不暴露底层模型。",
+    )
+    st.session_state.selected_chat_mode = selected_mode
+    st.sidebar.caption("快速：速度/成本优先；思考：复杂问题优先；Pro：综合体验。")
     
     # Sidebar: User info
     st.sidebar.markdown("---")
@@ -566,6 +616,7 @@ def render() -> None:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         citations = msg.get("citations", [])
+        ui_language = msg.get("ui_language", "Chinese")
         
         if role == "user":
             with st.chat_message("user"):
@@ -575,7 +626,7 @@ def render() -> None:
                 st.markdown(content)
                 if citations:
                     with st.expander(
-                        f"📚 引用来源（{len(citations)}）",
+                        _citation_label(len(citations), ui_language),
                         expanded=False,
                     ):
                         for citation in citations:
@@ -592,7 +643,11 @@ def render() -> None:
 
                             source_label = f"[{c_idx}] {source}"
                             if page is not None:
-                                source_label += f" (第 {page} 页)"
+                                source_label += (
+                                    f" (page {page})"
+                                    if ui_language == "English"
+                                    else f" (第 {page} 页)"
+                                )
 
                             if isinstance(source, str) and (
                                 source.startswith("http://") or source.startswith("https://")
@@ -628,9 +683,16 @@ def render() -> None:
         
         # Query knowledge base (complete RAG: Retrieve + Generate + Format)
         with st.chat_message("assistant"):
-            # Get selected model ID
-            selected_model_id = st.session_state.get("selected_chat_model")
-            with st.spinner("🔍 正在检索知识库并生成回答..."):
+            # Resolve model ID from selected mode
+            selected_model_id = _pick_model_id_for_mode(prompt)
+            selected_mode = st.session_state.get("selected_chat_mode", "快速")
+            ui_language = _resolve_ui_language(prompt)
+            spinner_text = (
+                "🔍 Retrieving knowledge base and generating answer..."
+                if ui_language == "English"
+                else "🔍 正在检索知识库并生成回答..."
+            )
+            with st.spinner(spinner_text):
                 result = _query_knowledge_base(prompt, top_k=10, model_id=selected_model_id)
             
             # Calculate elapsed time
@@ -638,12 +700,14 @@ def render() -> None:
             
             # Display elapsed time (small, subtle)
             st.caption(f"⏱️ 运行时间: {elapsed_time:.2f}秒")
+            if selected_model_id:
+                st.caption(f"🧭 模式: {selected_mode} | 路由模型: {selected_model_id}")
             
             # Display LLM-generated answer
             st.markdown(result["content"])
             if result["citations"]:
                 with st.expander(
-                    f"📚 引用来源（{len(result['citations'])}）",
+                    _citation_label(len(result["citations"]), ui_language),
                     expanded=False,
                 ):
                         for citation in result["citations"]:
@@ -660,7 +724,11 @@ def render() -> None:
 
                             source_label = f"[{c_idx}] {source}"
                             if page is not None:
-                                source_label += f" (第 {page} 页)"
+                                source_label += (
+                                    f" (page {page})"
+                                    if ui_language == "English"
+                                    else f" (第 {page} 页)"
+                                )
 
                             if isinstance(source, str) and (
                                 source.startswith("http://") or source.startswith("https://")
@@ -678,6 +746,7 @@ def render() -> None:
             "role": "assistant",
             "content": result["content"],
             "citations": [c.to_dict() if hasattr(c, "to_dict") else c for c in result["citations"]],
+            "ui_language": ui_language,
         }
         st.session_state.messages.append(assistant_msg)
         

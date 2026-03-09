@@ -32,7 +32,9 @@ DEFAULT_GOLDEN_SET = Path("tests/fixtures/golden_test_set.json")
 EVAL_PROGRESS_PATH = Path("logs/evaluation_progress.json")
 EVAL_HISTORY_PATH = Path("logs/evaluation_history.jsonl")
 PENDING_SAVE_KEY = "evaluation_panel_pending_save"
-BASELINE_STRATEGY_NAME = "Strategy A: Baseline (Dense+Sparse+Rerank)"
+ARENA_COST_WEIGHT = 0.33
+ARENA_LATENCY_WEIGHT = 0.33
+ARENA_QUALITY_WEIGHT = 0.34
 
 
 def render() -> None:
@@ -45,6 +47,15 @@ def render() -> None:
         _render_run_tab()
     with history_tab:
         _render_history_tab()
+
+
+def _create_scoring_engine() -> ScoringEngine:
+    """Create scoring engine aligned with LLM Arena legacy scoring."""
+    return ScoringEngine(
+        cost_weight=ARENA_COST_WEIGHT,
+        latency_weight=ARENA_LATENCY_WEIGHT,
+        quality_weight=ARENA_QUALITY_WEIGHT,
+    )
 
 
 def _render_run_tab() -> None:
@@ -259,7 +270,7 @@ def _run_benchmark(
         )
 
     all_metrics = _compute_aggregated_metrics(strategy_results, test_cases)
-    scoring_engine = ScoringEngine()
+    scoring_engine = _create_scoring_engine()
     _display_leaderboard(all_metrics, scoring_engine)
     _display_visualizations(all_metrics)
 
@@ -460,25 +471,16 @@ def _display_leaderboard(all_metrics: List[StrategyMetrics], scoring_engine: Sco
     with st.expander("📊 评分规则说明", expanded=False):
         st.markdown(
             """
-基线相对评分（替代 Min-Max）：
-- 固定基线 `Strategy A` 单项分 = 80
-- 质量指标（越高越好）：`80 * (1 + 相对变化率)`
-- 逆向指标（时延/成本，越低越好）：`80 * (1 - 相对变化率)`
-- 单项分裁剪到 [0, 100]
-- 综合分 = 质量(60%) + 延迟(30%) + 成本(10%)
-
-显著性检验：
-- 使用配对样本 t 检验 `scipy.stats.ttest_rel`
-- 标记规则：`p < 0.01 -> **`，`p < 0.05 -> *`，否则 `ns`
+传统综合评分（与 LLM Arena 一致）：
+- 成本/延迟/质量分别做 Min-Max 归一化
+- 质量为正向指标（越高越好）
+- 成本/延迟为逆向指标（越低越好）
+- 综合分 = 质量(34%) + 延迟(33%) + 成本(33%)
 """
         )
 
-    relative_scores = scoring_engine.compute_relative_scores(
-        all_metrics=all_metrics,
-        baseline_strategy_name=BASELINE_STRATEGY_NAME,
-    )
     for m in all_metrics:
-        m.composite_score = float(relative_scores.get(m.strategy_name, {}).get("composite_score", 0.0))  # type: ignore[attr-defined]
+        m.composite_score = scoring_engine.compute_composite_score(m, all_metrics)  # type: ignore[attr-defined]
     all_metrics.sort(key=lambda x: getattr(x, "composite_score", 0.0), reverse=True)
 
     def to_cn_rank(rank: int) -> str:
@@ -506,70 +508,17 @@ def _display_leaderboard(all_metrics: List[StrategyMetrics], scoring_engine: Sco
     st.dataframe(rows, width="stretch")
 
     st.markdown("### 📈 详细评分分解")
-    baseline = None
+    st.markdown("**按策略展示综合分与关键质量/效率指标（同 LLM Arena 打分口径）**")
     for m in all_metrics:
-        if m.strategy_name == BASELINE_STRATEGY_NAME:
-            baseline = m
-            break
-    if baseline is None:
-        st.info("未找到基线策略（Strategy A），无法展示相对显著性对比。")
-        return
-
-    def _sig_label(p: float) -> str:
-        if p < 0.01:
-            return "**", "极显著"
-        if p < 0.05:
-            return "*", "显著"
-        return "ns", "不显著"
-
-    def _pct_change(base: float, challenger: float) -> float:
-        if abs(base) <= 1e-12:
-            return 0.0
-        return (challenger - base) / abs(base) * 100.0
-
-    st.markdown("**策略差异对比（基于 Query 级原始分数 + 配对 t 检验）**")
-    for m in all_metrics:
-        if m.strategy_name == baseline.strategy_name:
-            continue
-        pvals = relative_scores.get(m.strategy_name, {}).get("p_values", {})
         st.markdown(f"### {m.strategy_name}")
-
-        faith_delta = _pct_change(baseline.avg_faithfulness or 0.0, m.avg_faithfulness or 0.0)
-        faith_arrow = "🟢" if faith_delta >= 0 else "🔴"
-        faith_trend = "提升" if faith_delta >= 0 else "下降"
-        faith_mark, faith_desc = _sig_label(float(pvals.get("faithfulness", 1.0)))
         st.markdown(
-            f"- Faithfulness: {(baseline.avg_faithfulness or 0.0):.3f} vs {(m.avg_faithfulness or 0.0):.3f} | "
-            f"{faith_trend} {abs(faith_delta):.1f}% {faith_arrow} | p-value: {float(pvals.get('faithfulness', 1.0)):.3f} {faith_mark} ({faith_desc}{'提升' if faith_delta >= 0 else '下降'})"
+            f"- 综合评分: {getattr(m, 'composite_score', 0.0):.2f} | 平均质量: {m.avg_quality_score * 100:.2f}% | "
+            f"平均生成时长: {m.avg_latency_s:.3f}s | 单次平均成本: ${m.avg_cost_per_query:.6f}"
         )
-
-        ar_delta = _pct_change(baseline.avg_answer_relevancy or 0.0, m.avg_answer_relevancy or 0.0)
-        ar_arrow = "🟢" if ar_delta >= 0 else "🔴"
-        ar_trend = "提升" if ar_delta >= 0 else "下降"
-        ar_mark, ar_desc = _sig_label(float(pvals.get("answer_relevancy", 1.0)))
         st.markdown(
-            f"- Answer Relevancy: {(baseline.avg_answer_relevancy or 0.0):.3f} vs {(m.avg_answer_relevancy or 0.0):.3f} | "
-            f"{ar_trend} {abs(ar_delta):.1f}% {ar_arrow} | p-value: {float(pvals.get('answer_relevancy', 1.0)):.3f} {ar_mark} ({ar_desc}{'提升' if ar_delta >= 0 else '下降'})"
-        )
-
-        cp_delta = _pct_change(baseline.avg_context_precision or 0.0, m.avg_context_precision or 0.0)
-        cp_arrow = "🟢" if cp_delta >= 0 else "🔴"
-        cp_trend = "提升" if cp_delta >= 0 else "下降"
-        cp_mark, cp_desc = _sig_label(float(pvals.get("context_precision", 1.0)))
-        st.markdown(
-            f"- Context Precision: {(baseline.avg_context_precision or 0.0):.3f} vs {(m.avg_context_precision or 0.0):.3f} | "
-            f"{cp_trend} {abs(cp_delta):.1f}% {cp_arrow} | p-value: {float(pvals.get('context_precision', 1.0)):.3f} {cp_mark} ({cp_desc}{'提升' if cp_delta >= 0 else '下降'})"
-        )
-
-        base_latency = float(getattr(baseline, "avg_e2e_latency_s", baseline.p95_latency_s))
-        cur_latency = float(getattr(m, "avg_e2e_latency_s", m.p95_latency_s))
-        lat_delta = _pct_change(base_latency, cur_latency)
-        lat_arrow = "🟢" if lat_delta <= 0 else "🔴"
-        lat_trend = "变快" if lat_delta <= 0 else "变慢"
-        lat_mark, lat_desc = _sig_label(float(pvals.get("latency", 1.0)))
-        st.markdown(
-            f"- End-to-End Latency: {base_latency:.3f}s vs {cur_latency:.3f}s | "
-            f"{lat_trend} {abs(lat_delta):.1f}% {lat_arrow} | p-value: {float(pvals.get('latency', 1.0)):.3f} {lat_mark} ({'差异不显著' if lat_mark == 'ns' else lat_desc + ('变快' if lat_delta <= 0 else '变慢')})"
+            f"- Faithfulness: {(m.avg_faithfulness or 0.0):.3f} | "
+            f"Answer Relevancy: {(m.avg_answer_relevancy or 0.0):.3f} | "
+            f"Context Precision: {(m.avg_context_precision or 0.0):.3f}"
         )
 
 
@@ -677,7 +626,7 @@ def _render_history_tab() -> None:
                 continue
 
             st.markdown("#### Leaderboard（历史重算）")
-            _display_leaderboard(metrics, ScoringEngine())
+            _display_leaderboard(metrics, _create_scoring_engine())
             st.markdown("#### 对比图（历史重算）")
             _display_visualizations(metrics)
 
@@ -823,12 +772,9 @@ def _rebuild_metrics_from_history_entry(entry: Dict[str, Any]) -> List[StrategyM
         max_cases = max((len(v) for v in strategy_results.values() if isinstance(v, list)), default=0)
         pseudo_test_cases = [{} for _ in range(max_cases)]
         metrics = _compute_aggregated_metrics(strategy_results, pseudo_test_cases)
-        relative_scores = ScoringEngine().compute_relative_scores(
-            all_metrics=metrics,
-            baseline_strategy_name=BASELINE_STRATEGY_NAME,
-        )
+        scoring_engine = _create_scoring_engine()
         for m in metrics:
-            m.composite_score = float(relative_scores.get(m.strategy_name, {}).get("composite_score", 0.0))  # type: ignore[attr-defined]
+            m.composite_score = scoring_engine.compute_composite_score(m, metrics)  # type: ignore[attr-defined]
         return metrics
 
     # Fallback for legacy entries that only contain aggregate metrics
