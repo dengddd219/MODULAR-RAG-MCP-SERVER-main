@@ -18,7 +18,7 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 # Linux/macOS:
 # source .venv/bin/activate
-python scripts/start_dashboard.py
+
 # 安装项目依赖
 pip install -e .
 
@@ -75,6 +75,17 @@ python -m src.mcp_server.server
 
 ---
 
+## 新增能力速览（2026-03）
+
+- **Dashboard 已升级为 8 页面**：在原有管理页面基础上新增 `Chat` 与 `LLM Arena`。
+- **Chat 页面增强**：支持会话持久化（`data/chat/conversations.json`）、模型选择器、运行时间展示、引用来源折叠查看。
+- **LLM Arena 压测台**：支持单次互动测试 + 批量压测（动态排行榜、历史记录、进度恢复、时延/成本/质量对比）。
+- **文档类型扩展**：Ingestion 现支持 `.md`（`MarkdownLoader`），由 Pipeline 按扩展名自动选择 Loader。
+- **意图能力增强**：新增文档级 `doc_intent` 标注与意图文件库视图（`data/documents_by_intent/{intent}/{collection}/`）。
+- **查询路由增强**：新增双层意图路由与本地查询复杂度分类能力（simple/complex）用于模型路由。
+
+---
+
 ## 配置说明
 
 主配置文件为 **`config/settings.yaml`**。主要字段含义如下。
@@ -104,6 +115,12 @@ python -m src.mcp_server.server
 | | `chunk_refiner.use_llm`, `metadata_enricher.use_llm` | 是否用 LLM 做块精炼/元数据增强 |
 
 未填写的 `api_key` / `azure_endpoint` 会从环境变量读取（如 `AZURE_OPENAI_API_KEY`）。
+
+新增相关配置建议关注：
+
+- **查询路由与模型选择**：如启用意图/复杂度路由，建议在配置中明确小模型与大模型的候选集合。
+- **可观测性**：`observability.trace_enabled` 与 `observability.trace_file` 建议在调试时开启，生产或性能压测时按需关闭。
+- **文档意图视图**：启用文档意图标注后，原始文件会同步到 `data/documents_by_intent/{intent}/{collection}/`，便于人工巡检。
 
 ---
 
@@ -162,7 +179,7 @@ MCP Server 使用 **stdio** 传输，需在客户端配置中指向本项目的 
 
 ## Dashboard 使用指南
 
-基于 Streamlit 的六页管理平台，用于查看配置、浏览数据、管理摄取与查看追踪。
+基于 Streamlit 的八页管理平台，用于查看配置、浏览数据、管理摄取、查看追踪、在线对话与模型压测。
 
 ### 启动方式
 
@@ -186,11 +203,13 @@ streamlit run src/observability/dashboard/app.py --server.port 8501
 | 页面 | 功能 |
 |------|------|
 | **Overview（系统总览）** | 组件配置卡片、数据资产统计（collection 数量等） |
+| **Chat（对话）** | Dashboard 内完整 RAG 闭环、引用来源折叠展示、会话持久化、模型选择器、运行时间 |
 | **Data Browser（数据浏览器）** | 按 collection 查看文档列表、Chunk 内容与元数据、图片预览 |
 | **Ingestion Manager（摄取管理）** | 文件上传、触发摄取、进度条、文档删除 |
 | **Ingestion Traces（摄取追踪）** | 摄取历史、阶段耗时瀑布图、trace 详情 |
 | **Query Traces（查询追踪）** | 查询历史、Dense/Sparse 对比、Rerank 前后结果 |
 | **Evaluation Panel（评估面板）** | 运行评估、指标展示、历史趋势 |
+| **LLM Arena（模型竞技场）** | 单次互动测试、批量压测、动态排行榜、历史记录、进度恢复、生成/测评时长分析 |
 
 截图示例可在运行后对上述各页截图保存，用于内部文档或 PR。
 
@@ -223,6 +242,31 @@ pytest -q tests/e2e/test_mcp_client.py
 pytest -q tests/e2e/test_dashboard_smoke.py
 ```
 
+### 诊断与联调脚本（新增）
+
+```bash
+# 检查 LLM Arena 相关模型与配置（本地 Ollama + API）
+python scripts/check_llm_arena_models.py
+
+# 快速验证 LLM Arena 路由与调用链路
+python scripts/test_llm_arena.py
+
+# 验证旧模型引用是否清理完成
+python scripts/verify_model_update.py
+
+# 检查 DeepSeek 主链路连接状态
+python scripts/check_deepseek_connection.py
+
+# 检查 LLM Arena 场景下 DeepSeek 连接状态
+python scripts/check_deepseek_arena.py
+
+# 验证 RAGAS 评估环境变量与调用链路
+python scripts/test_ragas_eval.py
+
+# 训练查询复杂度分类器（simple vs complex）
+python scripts/train_query_complexity_model.py --data data/training/query_complexity_dataset.csv
+```
+
 ---
 
 ## 全链路 E2E 验收（I5）
@@ -231,7 +275,7 @@ pytest -q tests/e2e/test_dashboard_smoke.py
 
 1. **摄取**：`python scripts/ingest.py --path tests/fixtures/sample_documents/ --collection test`
 2. **查询**：`python scripts/query.py --query "测试查询" --verbose`
-3. **Dashboard**：`python scripts/start_dashboard.py`，在浏览器中确认总览、数据浏览、摄取/查询追踪等页面正常。
+3. **Dashboard**：`python scripts/start_dashboard.py`，在浏览器中确认总览、Chat、数据浏览、摄取/查询追踪、LLM Arena 等页面正常。
 4. **评估**：`python scripts/evaluate.py`（需有 golden test set 或相应数据）。
 
 全部通过即表示全链路 E2E 验收完成。
@@ -266,9 +310,12 @@ pytest -q tests/e2e/test_dashboard_smoke.py
 ## 项目概览与分支说明
 
 - **Ingestion Pipeline**：PDF → 解析 → Chunk → Transform → Embedding → Upsert（支持多模态图片描述）
+- **文档格式支持**：已支持 `.pdf` + `.md`（按扩展名自动选择 Loader）
+- **意图增强**：文档级 `doc_intent` 标注 + 意图文件库视图 + 查询侧双层意图路由
 - **Hybrid Search**：Dense + Sparse (BM25) + RRF Fusion + 可选 Rerank
 - **MCP Server**：stdio 暴露 `query_knowledge_hub`、`list_collections`、`get_document_summary`
-- **Dashboard**：Streamlit 六页（总览 / 数据浏览 / 摄取管理 / 摄取追踪 / 查询追踪 / 评估面板）
+- **Dashboard**：Streamlit 八页（总览 / Chat / 数据浏览 / 摄取管理 / 摄取追踪 / 查询追踪 / 评估面板 / LLM Arena）
+- **模型路由能力**：支持本地查询复杂度分类（simple/complex）与多模型选择
 - **Evaluation**：Ragas + Custom 评估与 golden test set 回归
 
 详细架构与排期见 [DEV_SPEC.md](DEV_SPEC.md)。

@@ -5,6 +5,17 @@
 
 ## 📋 更新日志 (Changelog)
 
+### [3.9GraphRetriever ingestion] - 2026-03-09
+
+- **状态**：`[x] 已完成`
+- **GraphRetriever 接入**：在 Query Engine 中新增 `graph_retriever.py`，并将 Hybrid Search 从二路（Dense + Sparse）扩展为三路（Dense + Sparse + Graph）。
+- **融合升级**：`fusion.py` 支持动态多路 RRF 融合，覆盖 Dense/Sparse/Graph 检索结果。
+- **评估联动**：`evaluation_panel.py` / `llm_arena.py` 同步支持二路、三路、二路 vs 三路对比与统一榜单展示。
+- **评分体系更新**：采用 Baseline 相对评分（A=80 基准）+ 显著性检验（paired t-test, p-value）并在页面中可视化。
+- **历史结果增强**：支持历史记录细节展开、重算综合分与对比图展示。
+
+---
+
 ### [update3.8模型选择] - 2026-03-08
 
 #### LLM Arena Exhaustive Benchmark 全面增强

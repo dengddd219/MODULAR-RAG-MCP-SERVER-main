@@ -1,14 +1,18 @@
-"""Scoring Engine for normalizing and computing composite scores.
+"""Scoring Engine for relative baseline scoring + significance testing.
 
-This module provides functionality to normalize metrics and compute
-composite scores for model comparison in the LLM Arena.
+This module keeps legacy min-max helpers for compatibility, and adds a new
+baseline-relative scoring workflow:
+- Baseline strategy gets fixed component score = 80
+- Challenger strategies are scored by relative change vs baseline
+- Paired t-test p-values (scipy.stats.ttest_rel) are computed on raw per-query arrays
 """
 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+import math
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -49,27 +53,26 @@ class StrategyMetrics:
     routing_total_accuracy: Optional[float] = None
     routing_simple_accuracy: Optional[float] = None
     routing_complex_accuracy: Optional[float] = None
+    # Raw per-query arrays for significance testing (paired analysis)
+    raw_faithfulness_scores: List[float] = field(default_factory=list)
+    raw_answer_relevancy_scores: List[float] = field(default_factory=list)
+    raw_context_precision_scores: List[float] = field(default_factory=list)
+    raw_latency_scores: List[float] = field(default_factory=list)  # end-to-end preferred
+    raw_cost_scores: List[float] = field(default_factory=list)
 
 
 class ScoringEngine:
-    """Engine for normalizing metrics and computing composite scores.
-    
-    This class provides functionality to:
-    - Normalize positive metrics (higher is better)
-    - Normalize negative metrics (lower is better)
-    - Compute composite scores with weighted components
-    
-    Example:
-        >>> engine = ScoringEngine()
-        >>> metrics = StrategyMetrics(...)
-        >>> score = engine.compute_composite_score(metrics, all_metrics=[...])
-    """
+    """Scoring engine with relative baseline and p-value support."""
+
+    BASELINE_COMPONENT_SCORE = 80.0
+    MAX_COMPONENT_SCORE = 100.0
+    MIN_COMPONENT_SCORE = 0.0
     
     def __init__(
         self,
-        cost_weight: float = 0.33,
-        latency_weight: float = 0.33,
-        quality_weight: float = 0.33,
+        cost_weight: float = 0.10,
+        latency_weight: float = 0.30,
+        quality_weight: float = 0.60,
         routing_weight: float = 0.0,  # Only for hybrid strategies
     ) -> None:
         """Initialize ScoringEngine.
@@ -143,12 +146,143 @@ class ScoringEngine:
         # Clamp to [0, 1]
         return max(0.0, min(1.0, normalized))
     
+    def calculate_significance(
+        self,
+        baseline_scores: List[float],
+        challenger_scores: List[float],
+    ) -> float:
+        """Compute paired t-test p-value (ttest_rel).
+
+        Returns 1.0 on any non-computable scenario:
+        - arrays too short
+        - all paired values equal
+        - scipy unavailable / runtime error
+        """
+        try:
+            from scipy.stats import ttest_rel  # type: ignore
+        except Exception:
+            return 1.0
+
+        pairs: List[Tuple[float, float]] = []
+        for b, c in zip(baseline_scores, challenger_scores):
+            if not isinstance(b, (int, float)) or not isinstance(c, (int, float)):
+                continue
+            if math.isnan(b) or math.isinf(b) or math.isnan(c) or math.isinf(c):
+                continue
+            pairs.append((float(b), float(c)))
+
+        if len(pairs) < 2:
+            return 1.0
+
+        b_arr = [p[0] for p in pairs]
+        c_arr = [p[1] for p in pairs]
+        if all(abs(b - c) <= 1e-12 for b, c in zip(b_arr, c_arr)):
+            return 1.0
+
+        try:
+            _, p_value = ttest_rel(b_arr, c_arr, nan_policy="omit")
+            if not isinstance(p_value, (int, float)) or math.isnan(p_value) or math.isinf(p_value):
+                return 1.0
+            return float(max(0.0, min(1.0, p_value)))
+        except Exception:
+            return 1.0
+
+    def _relative_positive_score(self, baseline_mean: float, challenger_mean: float) -> float:
+        denom = abs(baseline_mean) if abs(baseline_mean) > 1e-12 else 1e-12
+        delta_ratio = (challenger_mean - baseline_mean) / denom
+        score = self.BASELINE_COMPONENT_SCORE * (1.0 + delta_ratio)
+        return max(self.MIN_COMPONENT_SCORE, min(self.MAX_COMPONENT_SCORE, score))
+
+    def _relative_inverse_score(self, baseline_mean: float, challenger_mean: float) -> float:
+        denom = abs(baseline_mean) if abs(baseline_mean) > 1e-12 else 1e-12
+        delta_ratio = (challenger_mean - baseline_mean) / denom
+        score = self.BASELINE_COMPONENT_SCORE * (1.0 - delta_ratio)
+        return max(self.MIN_COMPONENT_SCORE, min(self.MAX_COMPONENT_SCORE, score))
+
+    def compute_relative_scores(
+        self,
+        all_metrics: List[StrategyMetrics],
+        baseline_strategy_name: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        """Compute relative component/composite scores against baseline strategy."""
+        if not all_metrics:
+            return {}
+
+        baseline = None
+        for m in all_metrics:
+            if m.strategy_name == baseline_strategy_name:
+                baseline = m
+                break
+        if baseline is None:
+            for m in all_metrics:
+                if "Strategy A: Baseline" in m.strategy_name:
+                    baseline = m
+                    break
+        if baseline is None:
+            baseline = all_metrics[0]
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for m in all_metrics:
+            if m.strategy_name == baseline.strategy_name:
+                quality_score = self.BASELINE_COMPONENT_SCORE
+                latency_score = self.BASELINE_COMPONENT_SCORE
+                cost_score = self.BASELINE_COMPONENT_SCORE
+            else:
+                quality_score = self._relative_positive_score(
+                    baseline.avg_quality_score,
+                    m.avg_quality_score,
+                )
+                latency_score = self._relative_inverse_score(
+                    baseline.p95_latency_s,
+                    m.p95_latency_s,
+                )
+                cost_score = self._relative_inverse_score(
+                    baseline.avg_cost_per_query,
+                    m.avg_cost_per_query,
+                )
+
+            composite = (
+                self.quality_weight * quality_score
+                + self.latency_weight * latency_score
+                + self.cost_weight * cost_score
+            )
+            result[m.strategy_name] = {
+                "baseline_strategy_name": baseline.strategy_name,
+                "quality_score": quality_score,
+                "latency_score": latency_score,
+                "cost_score": cost_score,
+                "composite_score": max(0.0, min(100.0, composite)),
+                "p_values": {
+                    "faithfulness": self.calculate_significance(
+                        baseline.raw_faithfulness_scores,
+                        m.raw_faithfulness_scores,
+                    ),
+                    "answer_relevancy": self.calculate_significance(
+                        baseline.raw_answer_relevancy_scores,
+                        m.raw_answer_relevancy_scores,
+                    ),
+                    "context_precision": self.calculate_significance(
+                        baseline.raw_context_precision_scores,
+                        m.raw_context_precision_scores,
+                    ),
+                    "latency": self.calculate_significance(
+                        baseline.raw_latency_scores,
+                        m.raw_latency_scores,
+                    ),
+                    "cost": self.calculate_significance(
+                        baseline.raw_cost_scores,
+                        m.raw_cost_scores,
+                    ),
+                },
+            }
+        return result
+
     def compute_composite_score(
         self,
         metrics: StrategyMetrics,
         all_metrics: List[StrategyMetrics],
     ) -> float:
-        """Compute composite score for a strategy.
+        """Legacy min-max composite score (kept for backward compatibility).
         
         Args:
             metrics: StrategyMetrics for the current strategy
@@ -157,8 +291,6 @@ class ScoringEngine:
         Returns:
             Composite score in [0, 100], guaranteed to be a valid float (not NaN)
         """
-        import math
-        
         # Helper function to filter out NaN and invalid values
         def is_valid(value: float) -> bool:
             """Check if value is valid (not NaN, not inf, not None)."""

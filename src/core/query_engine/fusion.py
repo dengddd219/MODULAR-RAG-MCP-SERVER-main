@@ -1,8 +1,9 @@
-"""Reciprocal Rank Fusion (RRF) for combining multiple retrieval results.
+"""Reciprocal Rank Fusion (RRF) for combining multi-route retrieval results.
 
 This module implements the RRF fusion algorithm that combines ranking lists from
-Dense and Sparse retrievers into a unified ranking. RRF is a simple yet effective
-rank aggregation method that doesn't require score normalization.
+Dense/Sparse/Graph retrievers (or any number of routes) into a unified ranking.
+RRF is a simple yet effective rank aggregation method that doesn't require score
+normalization.
 
 Reference:
     Cormack, G. V., Clarke, C. L., & Buettcher, S. (2009).
@@ -92,7 +93,8 @@ class RRFFusion:
         Args:
             ranking_lists: List of ranking lists, each containing RetrievalResult
                            objects sorted by relevance (descending).
-                           Typically [dense_results, sparse_results].
+                           Typical example:
+                           [dense_results, sparse_results, graph_results]
             top_k: Maximum number of results to return. If None, returns all.
             trace: Optional TraceContext for observability (reserved for Stage F).
         

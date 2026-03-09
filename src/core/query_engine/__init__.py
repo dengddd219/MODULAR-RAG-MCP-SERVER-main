@@ -25,6 +25,10 @@ from src.core.query_engine.sparse_retriever import (
     SparseRetriever,
     create_sparse_retriever,
 )
+from src.core.query_engine.graph_retriever import (
+    GraphRetriever,
+    create_graph_retriever,
+)
 from src.core.query_engine.fusion import (
     RRFFusion,
     rrf_score,
@@ -47,6 +51,8 @@ __all__ = [
     "create_dense_retriever",
     "SparseRetriever",
     "create_sparse_retriever",
+    "GraphRetriever",
+    "create_graph_retriever",
     "RRFFusion",
     "rrf_score",
     "HybridSearch",

@@ -77,6 +77,7 @@ DEFAULT_GOLDEN_SET = Path("tests/fixtures/golden_test_set_model_evaluation_and_s
 BENCHMARK_PROGRESS_DIR = Path("logs")
 BENCHMARK_PROGRESS_FILE = BENCHMARK_PROGRESS_DIR / "benchmark_progress.json"
 BENCHMARK_HISTORY_FILE = BENCHMARK_PROGRESS_DIR / "benchmark_history.jsonl"
+PENDING_BENCHMARK_SAVE_KEY = "llm_arena_pending_benchmark_save"
 
 # Model tier definitions
 # Tier 2: Local SLM models (Ollama)
@@ -907,6 +908,27 @@ def _render_benchmark_run() -> None:
         "- 复杂询问（complex）→ 使用 API 大模型\n\n"
         "您只需要点击开始，系统会自动运行所有组合并实时更新排行榜。"
     )
+
+    pending_save = st.session_state.get(PENDING_BENCHMARK_SAVE_KEY)
+    if isinstance(pending_save, dict):
+        st.info("已生成本次 leaderboard，可选择是否保存此次结果到历史。")
+        ps1, ps2 = st.columns(2)
+        if ps1.button("💾 保存此次结果", key="arena_save_latest_result"):
+            _save_benchmark_history(
+                strategy_results=pending_save["strategy_results"],
+                test_cases=pending_save["test_cases"],
+                all_strategies=pending_save["all_strategies"],
+                final_metrics=pending_save["final_metrics"],
+                fast_mode=pending_save["fast_mode"],
+                test_set_path=pending_save["test_set_path"],
+                run_name=pending_save.get("run_name"),
+                run_note=pending_save.get("run_note"),
+            )
+            st.session_state.pop(PENDING_BENCHMARK_SAVE_KEY, None)
+            st.success("本次结果已保存到历史记录。")
+        if ps2.button("🗑️ 丢弃此次结果", key="arena_discard_latest_result"):
+            st.session_state.pop(PENDING_BENCHMARK_SAVE_KEY, None)
+            st.warning("已丢弃当前未保存结果。")
     
     # Test set file uploader (compact)
     col1, col2 = st.columns([3, 1])
@@ -1064,11 +1086,16 @@ def _render_benchmark_run() -> None:
                     f"- 已完成策略: {completed_count}/{total_count}\n"
                     f"- 已完成查询: {total_queries_completed}/{total_queries_expected}\n"
                     f"- 测试集: `{Path(saved_test_set).name}`\n\n"
-                    f"💡 **提示**：请切换到「📈 历史结果」标签页查看完整的排行榜和可视化分析。"
+                    f"💡 **提示**：可在此处点击「保存此次结果」，或切换到「📈 历史结果」查看历史。"
                 )
+
+                sv1, sv2 = st.columns(2)
+                if sv1.button("💾 保存此次结果", key="arena_save_completed_progress"):
+                    _save_completed_progress_to_history(saved_progress)
+                    st.success("已将当前完成结果保存到历史。")
                 
                 # Clear progress button
-                if st.button("🗑️ 清除进度并开始新的测试", key="benchmark_clear_completed"):
+                if sv2.button("🗑️ 清除进度并开始新的测试", key="benchmark_clear_completed"):
                     _clear_benchmark_progress()
                     st.success("✅ 进度已清除")
                     st.rerun()
@@ -1509,18 +1536,20 @@ def _run_benchmark(
             test_set_path=test_set_path,
         )
         
-        # Save to history for future reference
-        _save_benchmark_history(
-            strategy_results=strategy_results,
-            test_cases=test_cases,
-            all_strategies=all_strategies,
-            final_metrics=final_metrics,
-            fast_mode=fast_mode,
-            test_set_path=test_set_path,
-        )
+        # Keep result as pending until user explicitly chooses "save this result"
+        st.session_state[PENDING_BENCHMARK_SAVE_KEY] = {
+            "strategy_results": strategy_results,
+            "test_cases": test_cases,
+            "all_strategies": all_strategies,
+            "final_metrics": final_metrics,
+            "fast_mode": fast_mode,
+            "test_set_path": test_set_path,
+            "run_name": run_name,
+            "run_note": run_note,
+        }
         
         # Optionally clear progress after completion (user can choose to keep it)
-        st.info("💾 进度已保存。如需清除进度文件，请刷新页面后点击「清除进度」按钮。")
+        st.info("💾 进度已保存。若需写入历史，请点击「保存此次结果」。")
     
     except Exception as e:
         logger.exception("Benchmark execution failed")
@@ -1932,6 +1961,11 @@ def _compute_aggregated_metrics(
             routing_total_accuracy=routing_total_accuracy,
             routing_simple_accuracy=routing_simple_accuracy,
             routing_complex_accuracy=routing_complex_accuracy,
+            raw_faithfulness_scores=faithfulness_scores,
+            raw_answer_relevancy_scores=answer_relevancy_scores,
+            raw_context_precision_scores=context_precision_scores,
+            raw_latency_scores=[float(r.get("latency_s", 0.0)) for r in successful],
+            raw_cost_scores=[float(r.get("cost", 0.0)) for r in successful],
         )
         
         all_metrics.append(metrics)
@@ -1958,55 +1992,14 @@ def _display_leaderboard(
     # Display scoring rules and calculation process
     with st.expander("📊 评分规则说明", expanded=False):
         st.markdown("""
-        #### 综合评分计算公式
-        
-        综合评分 = (成本得分 × 33.3% + 延迟得分 × 33.3% + 质量得分 × 33.3% + 路由准确率得分 × 权重) × 100
-        
-        **各维度得分计算：**
-        
-        1. **成本得分** (越低越好，负向指标)
-           - 公式：`成本得分 = (最大成本 - 当前成本) / (最大成本 - 最小成本)`
-           - 范围：0-1，转换为 0-100 分
-        
-        2. **延迟得分** (越低越好，负向指标)
-           - 使用 P95 延迟时间
-           - 公式：`延迟得分 = (最大延迟 - 当前延迟) / (最大延迟 - 最小延迟)`
-           - 范围：0-1，转换为 0-100 分
-        
-        3. **质量得分** (越高越好，正向指标)
-           - 基于 Ragas 评估指标（Faithfulness, Answer Relevancy, Context Precision）
-           
-           **计算过程（两步）：**
-           
-           **第一步：单个查询的质量得分**
-           - 对每个测试用例，通过 RAGAS 评估得到三个指标：
-             - **Faithfulness (忠实度)**：答案是否忠实于检索到的上下文（0-1，越高越好）
-             - **Answer Relevancy (答案相关性)**：答案是否与查询相关（0-1，越高越好）
-             - **Context Precision (上下文精确度)**：检索到的上下文是否精确相关（0-1，越高越好）
-           - 单个查询的质量得分 = (Faithfulness + Answer Relevancy + Context Precision) / 3 × 100
-           - 结果范围：0-100 分
-           
-           **第二步：策略的平均质量得分**
-           - 收集该策略所有成功查询的质量得分
-           - 平均质量得分 = 所有查询质量得分的平均值 / 100
-           - 结果范围：0-1（在排行榜中显示为 0-100%）
-           
-           **综合评分中的质量得分计算：**
-           - 公式：`质量得分 = (当前策略的平均质量 - 所有策略中的最小平均质量) / (最大平均质量 - 最小平均质量)`
-           - 范围：0-1，转换为 0-100 分后参与综合评分计算
-           
-           **说明：**
-           - 所有 RAGAS 指标都通过 LLM-as-Judge 方式评估，无需人工标注
-           - 如果某个查询的 RAGAS 评估失败，使用默认值 50 分（0.5）
-        
-        4. **路由准确率得分** (仅双模型策略，越高越好，正向指标)
-           - 公式：`路由得分 = (当前准确率 - 最小准确率) / (最大准确率 - 最小准确率)`
-           - 范围：0-1，转换为 0-100 分
-        
-        **归一化说明：**
-        - 所有指标都在所有策略间进行归一化，确保公平比较
-        - 如果所有策略的某个指标值相同，则使用中性分数 0.5
-        - 最终综合评分范围：0-100 分，分数越高表示综合表现越好
+        #### 基线相对评分 + 显著性检验
+
+        - 基线策略单项基础分固定为 **80**
+        - 质量指标（越高越好）：`80 * (1 + 相对变化率)`
+        - 逆向指标（时延/成本，越低越好）：`80 * (1 - 相对变化率)`
+        - 综合评分：`质量(60%) + 延迟(30%) + 成本(10%)`
+        - 显著性检验：对每个 Query 的原始分数做配对样本 t 检验（`ttest_rel`）
+        - 显著性标记：`p < 0.01 -> **`，`p < 0.05 -> *`，否则 `ns`
         """)
         
         # Show current weights
@@ -2033,12 +2026,17 @@ def _display_leaderboard(
     settings = load_settings()
     benchmark_id = st.session_state.get("benchmark_model_id", _get_benchmark_model_id(settings))
     
-    # Compute composite scores
+    # Compute relative baseline scores
+    baseline_strategy_name = next(
+        (m.strategy_name for m in all_metrics if "[Benchmark]" in m.strategy_name and " + " not in m.strategy_name),
+        all_metrics[0].strategy_name,
+    )
+    relative_scores = scoring_engine.compute_relative_scores(
+        all_metrics=all_metrics,
+        baseline_strategy_name=baseline_strategy_name,
+    )
     for metrics in all_metrics:
-        metrics.composite_score = scoring_engine.compute_composite_score(
-            metrics,
-            all_metrics,
-        )
+        metrics.composite_score = float(relative_scores.get(metrics.strategy_name, {}).get("composite_score", 0.0))
     
     # Sort by composite score
     all_metrics.sort(key=lambda m: getattr(m, "composite_score", 0.0), reverse=True)
@@ -2302,70 +2300,63 @@ def _display_leaderboard(
                 
                 st.caption("💡 提示：提升百分比中，正数表示改进（成本/延迟降低或质量/评分提高），负数表示下降。")
     
-    # Display detailed scoring breakdown for each strategy
-    # Ensure this section is full-width by placing it outside any column context
+    # Relative + significance breakdown
     st.markdown("#### 📈 详细评分分解")
-    with st.expander("查看各策略的详细评分计算过程", expanded=False):
-        # Get ranges for normalization (compute once for all strategies)
-        all_costs = [m.avg_cost_per_query for m in all_metrics if m.avg_cost_per_query > 0]
-        all_latencies = [m.p95_latency_s for m in all_metrics if m.p95_latency_s >= 0]
-        all_qualities = [m.avg_quality_score for m in all_metrics if 0 <= m.avg_quality_score <= 1]
-        all_routing = [m.routing_total_accuracy for m in all_metrics if m.routing_total_accuracy is not None]
-        
-        # Compute detailed breakdown for each strategy
-        for metrics in all_metrics:
-            st.markdown(f"##### {metrics.strategy_name}")
-            
-            # Use columns for metrics display, but ensure they're properly closed
-            col1, col2 = st.columns(2)
-            
-            # Initialize default scores
-            cost_score = 0.5
-            lat_score = 0.5
-            qual_score = 0.5
-            rout_score = 0.5
-            
-            with col1:
-                # Cost score
-                if all_costs:
-                    min_cost, max_cost = min(all_costs), max(all_costs)
-                    cost_score = scoring_engine.normalize_negative(metrics.avg_cost_per_query, min_cost, max_cost) if max_cost > min_cost else 0.5
-                    st.metric("成本得分", f"{cost_score * 100:.2f}", 
-                             f"成本: ${metrics.avg_cost_per_query:.6f} (范围: ${min_cost:.6f} - ${max_cost:.6f})")
-                
-                # Latency score
-                if all_latencies:
-                    min_lat, max_lat = min(all_latencies), max(all_latencies)
-                    lat_score = scoring_engine.normalize_negative(metrics.p95_latency_s, min_lat, max_lat) if max_lat > min_lat else 0.5
-                    st.metric("延迟得分", f"{lat_score * 100:.2f}",
-                             f"P95延迟: {metrics.p95_latency_s:.3f}s (范围: {min_lat:.3f}s - {max_lat:.3f}s)")
-            
-            with col2:
-                # Quality score
-                if all_qualities:
-                    min_qual, max_qual = min(all_qualities), max(all_qualities)
-                    qual_score = scoring_engine.normalize_positive(metrics.avg_quality_score, min_qual, max_qual) if max_qual > min_qual else 0.5
-                    st.metric("质量得分", f"{qual_score * 100:.2f}",
-                             f"质量: {metrics.avg_quality_score * 100:.2f}% (范围: {min_qual * 100:.2f}% - {max_qual * 100:.2f}%)")
-                
-                # Routing score (if applicable)
-                if metrics.routing_total_accuracy is not None and all_routing:
-                    min_rout, max_rout = min(all_routing), max(all_routing)
-                    rout_score = scoring_engine.normalize_positive(metrics.routing_total_accuracy, min_rout, max_rout) if max_rout > min_rout else 0.5
-                    st.metric("路由得分", f"{rout_score * 100:.2f}",
-                             f"准确率: {metrics.routing_total_accuracy * 100:.2f}% (范围: {min_rout * 100:.2f}% - {max_rout * 100:.2f}%)")
-            
-            # Columns are automatically closed here, now show full-width composite calculation
-            routing_part = (f" + 路由({rout_score * 100:.2f}) × {scoring_engine.routing_weight * 100:.1f}%" 
-                           if metrics.routing_total_accuracy is not None and scoring_engine.routing_weight > 0 else "")
-            composite = getattr(metrics, 'composite_score', 50.0)
-            st.info(f"**综合评分 = {composite:.2f}** = "
-                   f"成本({cost_score * 100:.2f}) × {scoring_engine.cost_weight * 100:.1f}% + "
-                   f"延迟({lat_score * 100:.2f}) × {scoring_engine.latency_weight * 100:.1f}% + "
-                   f"质量({qual_score * 100:.2f}) × {scoring_engine.quality_weight * 100:.1f}%"
-                   + routing_part)
-            
-            st.divider()
+    with st.expander("查看基于 Baseline 的差异与显著性", expanded=False):
+        baseline = None
+        for m in all_metrics:
+            if m.strategy_name == baseline_strategy_name:
+                baseline = m
+                break
+        if baseline is None:
+            st.info("未找到基线策略，无法做显著性对比。")
+        else:
+            def _sig(p: float) -> tuple[str, str]:
+                if p < 0.01:
+                    return "**", "极显著"
+                if p < 0.05:
+                    return "*", "显著"
+                return "ns", "不显著"
+
+            def _pct(base: float, cur: float) -> float:
+                if abs(base) <= 1e-12:
+                    return 0.0
+                return (cur - base) / abs(base) * 100.0
+
+            for m in all_metrics:
+                if m.strategy_name == baseline.strategy_name:
+                    continue
+                pvals = relative_scores.get(m.strategy_name, {}).get("p_values", {})
+                st.markdown(f"##### {m.strategy_name}")
+
+                cp_delta = _pct(baseline.avg_context_precision or 0.0, m.avg_context_precision or 0.0)
+                cp_arrow = "🟢" if cp_delta >= 0 else "🔴"
+                cp_trend = "提升" if cp_delta >= 0 else "下降"
+                cp_mark, cp_desc = _sig(float(pvals.get("context_precision", 1.0)))
+                st.markdown(
+                    f"- Context Precision: {(baseline.avg_context_precision or 0.0):.3f} vs {(m.avg_context_precision or 0.0):.3f} | "
+                    f"{cp_trend} {abs(cp_delta):.1f}% {cp_arrow} | p-value: {float(pvals.get('context_precision', 1.0)):.3f} {cp_mark} ({cp_desc}{'提升' if cp_delta >= 0 else '下降'})"
+                )
+
+                lat_delta = _pct(baseline.avg_latency_s, m.avg_latency_s)
+                lat_arrow = "🟢" if lat_delta <= 0 else "🔴"
+                lat_trend = "变快" if lat_delta <= 0 else "变慢"
+                lat_mark, lat_desc = _sig(float(pvals.get("latency", 1.0)))
+                st.markdown(
+                    f"- End-to-End Latency: {baseline.avg_latency_s:.3f}s vs {m.avg_latency_s:.3f}s | "
+                    f"{lat_trend} {abs(lat_delta):.1f}% {lat_arrow} | p-value: {float(pvals.get('latency', 1.0)):.3f} {lat_mark} ({'差异不显著' if lat_mark == 'ns' else lat_desc + ('变快' if lat_delta <= 0 else '变慢')})"
+                )
+
+                faith_delta = _pct(baseline.avg_faithfulness or 0.0, m.avg_faithfulness or 0.0)
+                faith_arrow = "🟢" if faith_delta >= 0 else "🔴"
+                faith_trend = "提升" if faith_delta >= 0 else "下降"
+                faith_mark, faith_desc = _sig(float(pvals.get("faithfulness", 1.0)))
+                st.markdown(
+                    f"- Faithfulness: {(baseline.avg_faithfulness or 0.0):.3f} vs {(m.avg_faithfulness or 0.0):.3f} | "
+                    f"{faith_trend} {abs(faith_delta):.1f}% {faith_arrow} | p-value: {float(pvals.get('faithfulness', 1.0)):.3f} {faith_mark} ({faith_desc}{'提升' if faith_delta >= 0 else '下降'})"
+                )
+
+                st.divider()
     
     # Visualization section
     st.markdown("#### 📊 可视化分析")
@@ -2877,6 +2868,11 @@ def _save_benchmark_history(
                     "routing_total_accuracy": m.routing_total_accuracy,
                     "routing_simple_accuracy": m.routing_simple_accuracy,
                     "routing_complex_accuracy": m.routing_complex_accuracy,
+                    "raw_faithfulness_scores": m.raw_faithfulness_scores,
+                    "raw_answer_relevancy_scores": m.raw_answer_relevancy_scores,
+                    "raw_context_precision_scores": m.raw_context_precision_scores,
+                    "raw_latency_scores": m.raw_latency_scores,
+                    "raw_cost_scores": m.raw_cost_scores,
                     "composite_score": getattr(m, 'composite_score', 50.0),
                 }
                 for m in (final_metrics or [])
@@ -2890,6 +2886,45 @@ def _save_benchmark_history(
         logger.info(f"Benchmark history saved to {BENCHMARK_HISTORY_FILE}")
     except Exception as e:
         logger.error(f"Failed to save benchmark history: {e}", exc_info=True)
+
+
+def _save_completed_progress_to_history(progress_data: Dict[str, Any]) -> None:
+    """Save a completed progress snapshot into benchmark history."""
+    completed_strategies = progress_data.get("completed_strategies", [])
+    strategy_results: Dict[str, List[Dict[str, Any]]] = {}
+    for item in completed_strategies:
+        strategy_name = item.get("strategy_name")
+        if strategy_name:
+            strategy_results[strategy_name] = item.get("results", [])
+
+    test_cases = progress_data.get("test_cases", [])
+    all_strategies_raw = progress_data.get("all_strategies", [])
+    all_strategies: List[Tuple[str, Optional[str], str]] = []
+    for s in all_strategies_raw:
+        name = s.get("strategy_name")
+        large = s.get("large_model")
+        if not name or not large:
+            continue
+        all_strategies.append((name, s.get("small_model"), large))
+
+    final_metrics = _compute_aggregated_metrics(strategy_results, test_cases)
+    scoring_engine = ScoringEngine()
+    baseline_name = next(
+        (m.strategy_name for m in final_metrics if "[Benchmark]" in m.strategy_name and " + " not in m.strategy_name),
+        final_metrics[0].strategy_name if final_metrics else "",
+    )
+    relative_scores = scoring_engine.compute_relative_scores(final_metrics, baseline_name)
+    for metrics in final_metrics:
+        metrics.composite_score = float(relative_scores.get(metrics.strategy_name, {}).get("composite_score", 0.0))  # type: ignore[attr-defined]
+
+    _save_benchmark_history(
+        strategy_results=strategy_results,
+        test_cases=test_cases,
+        all_strategies=all_strategies,
+        final_metrics=final_metrics,
+        fast_mode=bool(progress_data.get("fast_mode", False)),
+        test_set_path=str(progress_data.get("test_set_path", "")),
+    )
 
 
 def _load_benchmark_history() -> List[Dict[str, Any]]:
@@ -2991,6 +3026,11 @@ def _render_benchmark_history() -> None:
                 routing_total_accuracy=m_data.get("routing_total_accuracy"),
                 routing_simple_accuracy=m_data.get("routing_simple_accuracy"),
                 routing_complex_accuracy=m_data.get("routing_complex_accuracy"),
+                raw_faithfulness_scores=m_data.get("raw_faithfulness_scores", []) or [],
+                raw_answer_relevancy_scores=m_data.get("raw_answer_relevancy_scores", []) or [],
+                raw_context_precision_scores=m_data.get("raw_context_precision_scores", []) or [],
+                raw_latency_scores=m_data.get("raw_latency_scores", []) or [],
+                raw_cost_scores=m_data.get("raw_cost_scores", []) or [],
             )
             # Set composite_score as attribute
             metrics.composite_score = m_data.get("composite_score", 50.0)
