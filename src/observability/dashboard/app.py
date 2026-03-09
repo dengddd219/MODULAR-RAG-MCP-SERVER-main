@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from src.observability.dashboard.i18n import LANGUAGE_OPTIONS, ensure_language, t
+
 
 # ── Page definitions ─────────────────────────────────────────────────
 
@@ -54,18 +56,17 @@ def _page_llm_arena() -> None:
     render()
 
 
-# ── Navigation ───────────────────────────────────────────────────────
-
-pages = [
-    st.Page(_page_overview, title="Overview", icon="📊", default=True),
-    st.Page(_page_chat_interface, title="Chat", icon="💬"),
-    st.Page(_page_data_browser, title="Data Browser", icon="🔍"),
-    st.Page(_page_ingestion_manager, title="Ingestion Manager", icon="📥"),
-    st.Page(_page_ingestion_traces, title="Ingestion Traces", icon="🔬"),
-    st.Page(_page_query_traces, title="Query Traces", icon="🔎"),
-    st.Page(_page_evaluation_panel, title="Evaluation Panel", icon="📏"),
-    st.Page(_page_llm_arena, title="LLM Arena", icon="🏟️"),
-]
+def _pages() -> list[st.Page]:
+    return [
+        st.Page(_page_overview, title=t("Overview", "总览"), icon="📊", default=True),
+        st.Page(_page_chat_interface, title=t("Chat", "对话"), icon="💬"),
+        st.Page(_page_data_browser, title=t("Data Browser", "数据浏览"), icon="🔍"),
+        st.Page(_page_ingestion_manager, title=t("Ingestion Manager", "导入管理"), icon="📥"),
+        st.Page(_page_ingestion_traces, title=t("Ingestion Traces", "导入追踪"), icon="🔬"),
+        st.Page(_page_query_traces, title=t("Query Traces", "查询追踪"), icon="🔎"),
+        st.Page(_page_evaluation_panel, title=t("Evaluation Panel", "评测面板"), icon="📏"),
+        st.Page(_page_llm_arena, title="LLM Arena", icon="🏟️"),
+    ]
 
 
 def main() -> None:
@@ -75,7 +76,15 @@ def main() -> None:
         layout="wide",
     )
 
-    nav = st.navigation(pages)
+    ensure_language()
+    st.sidebar.selectbox(
+        t("Language", "语言"),
+        options=LANGUAGE_OPTIONS,
+        key="dashboard_language",
+    )
+    st.sidebar.divider()
+
+    nav = st.navigation(_pages())
     nav.run()
 
 

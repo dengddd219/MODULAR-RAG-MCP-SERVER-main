@@ -14,6 +14,7 @@ import shutil
 
 import streamlit as st
 
+from src.observability.dashboard.i18n import t
 from src.observability.dashboard.services.data_service import get_data_service
 
 
@@ -148,7 +149,7 @@ def _run_ingestion(
             predicted_value = intent_info
 
         if predicted_value:
-            st.subheader("🧠 Document Intent (Model Suggestion & Manual Label)")
+            st.subheader(t("🧠 Document Intent (Model Suggestion & Manual Label)", "🧠 文档意图（模型建议与人工标签）"))
 
             # Human-friendly display label
             def _pretty_label(value: str) -> str:
@@ -159,12 +160,12 @@ def _run_ingestion(
             if confidence is not None:
                 st.markdown(
                     f"**Model suggestion**: `{predicted_value}` "
-                    f"（显示名：**{display_default}**，置信度：**{confidence:.1%}**）"
+                    f"(Display name: **{display_default}**, confidence: **{confidence:.1%}**)"
                 )
             else:
                 st.markdown(
                     f"**Model suggestion**: `{predicted_value}` "
-                    f"（显示名：**{display_default}**）"
+                    f"(Display name: **{display_default}**)"
                 )
 
             # Optional: show per-class probability table if available
@@ -179,10 +180,10 @@ def _run_ingestion(
                             "probability": round(float(prob), 4),
                         }
                     )
-                with st.expander("查看模型对各意图类别的概率分布", expanded=False):
+                with st.expander(t("View probability distribution by intent class", "查看各意图类别的概率分布"), expanded=False):
                     st.dataframe(intent_rows, hide_index=True)
 
-            st.markdown("请选择本篇文档的**最终意图标签**（模型结果仅作为默认参考，上传者拥有最终决定权）：")
+            st.markdown(t("Please choose the **final intent label** for this document. The model output is only a default suggestion; the uploader has the final decision.", "请选择该文档的**最终意图标签**。模型输出仅作为默认建议，最终决定权在上传者。"))
 
             INTENT_OPTIONS = [
                 "unknown",     # 无法归类 / 与五大分类均无关
@@ -197,17 +198,17 @@ def _run_ingestion(
             default_value = predicted_value if predicted_value in INTENT_OPTIONS else "unknown"
 
             final_intent = st.selectbox(
-                "最终分类标签",
+                t("Final intent label", "最终分类标签"),
                 options=INTENT_OPTIONS,
                 format_func=lambda v: _pretty_label(v),
                 index=INTENT_OPTIONS.index(default_value),
                 key=f"final_doc_intent_{uploaded_file.name}",
-                help="从 5 个业务意图中选择一个作为该文档的最终标签。",
+                help=t("Choose one of the five business intents as the final label for this document.", "从 5 个业务意图中选择一个作为该文档的最终标签。"),
             )
 
             # 二阶段确认：Start Ingestion 负责“进入 all 库”（已完成向量/BM25 等存储），
             # 下方按钮用于用户确认最终标签，并将原始文件拷贝到对应 intent folder。
-            if st.button("✅ 确认最终分类", key=f"confirm_intent_{uploaded_file.name}"):
+            if st.button(t("✅ Confirm Final Label", "✅ 确认最终分类"), key=f"confirm_intent_{uploaded_file.name}"):
                 try:
                     # 计算源文件在 "all documents" 库中的路径
                     from src.core.settings import resolve_path
@@ -221,8 +222,10 @@ def _run_ingestion(
 
                     if not source_path.exists():
                         st.warning(
-                            f"找不到源文件 `{source_path}`，但已记录最终标签："
-                            f"**{_pretty_label(final_intent)}**。"
+                            t(
+                                f"Source file `{source_path}` could not be found, but the final label was recorded as **{_pretty_label(final_intent)}**.",
+                                f"找不到源文件 `{source_path}`，但最终标签已记录为 **{_pretty_label(final_intent)}**。",
+                            )
                         )
                     else:
                         # 按最终 intent 归档到 intent-specific 文件夹
@@ -233,13 +236,13 @@ def _run_ingestion(
                         shutil.copy2(source_path, intent_dir / uploaded_file.name)
 
                         st.success(
-                            f"已确认最终标签：**{_pretty_label(final_intent)}** "
-                            f"(内部值：`{final_intent}`)。\n\n"
-                            f"- 已在 all 库中可用（collection=`{source_collection}`）\n"
-                            f"- 并已归档到 `data/documents_by_intent/{final_intent}/{source_collection}/`"
+                            t(
+                                f"Final label confirmed: **{_pretty_label(final_intent)}** (internal value: `{final_intent}`).\n\n- Available in the `all` library (collection=`{source_collection}`)\n- Archived to `data/documents_by_intent/{final_intent}/{source_collection}/`",
+                                f"已确认最终标签：**{_pretty_label(final_intent)}**（内部值：`{final_intent}`）。\n\n- 已在 `all` 库中可用（collection=`{source_collection}`）\n- 并已归档到 `data/documents_by_intent/{final_intent}/{source_collection}/`",
+                            )
                         )
                 except Exception as exc:
-                    st.error(f"确认最终分类时出错：{exc}")
+                    st.error(t("An error occurred while confirming the final label: ", "确认最终分类时出错：") + str(exc))
     except Exception as exc:
         status_text.error(f"Ingestion failed: {exc}")
     finally:
@@ -248,19 +251,19 @@ def _run_ingestion(
 
 def render() -> None:
     """Render the Ingestion Manager page."""
-    st.header("📥 Ingestion Manager")
+    st.header(t("📥 Ingestion Manager", "📥 导入管理"))
 
     # 在 Session State 中记住当前选中的 collection 过滤器；
     # 若尚未选择，则默认使用 "all"（文档列表显示全部，上传时实际写入 default）。
     current_collection = st.session_state.get("collection_filter", "all")
 
     # ── Upload section ─────────────────────────────────────────────
-    st.subheader("📤 Upload & Ingest")
+    st.subheader(t("📤 Upload & Ingest", "📤 上传与导入"))
 
     col1, col2 = st.columns([3, 1])
     with col1:
         uploaded = st.file_uploader(
-            "Select a file to ingest",
+            t("Select a file to ingest", "选择要导入的文件"),
             type=["pdf", "txt", "md", "docx"],
             key="ingest_uploader",
         )
@@ -271,15 +274,15 @@ def render() -> None:
     # 仅在用户显式点击“开始摄取”后，才真正将文件写入知识库。
     # 注意：摄取使用“当前 Collection 过滤器”作为目标库；当为 all 时，默认写入 default。
     if uploaded is not None:
-        st.caption("已选择文件：**%s**" % uploaded.name)
+        st.caption(t("Selected file: **%s**", "已选择文件：**%s**") % uploaded.name)
 
-        if st.button("🚀 Start Ingestion", key="btn_ingest"):
+        if st.button(t("🚀 Start Ingestion", "🚀 开始导入"), key="btn_ingest"):
             # 根据当前过滤器决定本次上传写入哪个 collection
             target_collection = (
                 "default" if current_collection in ("all", "") else current_collection
             )
 
-            progress_bar = st.progress(0, text="Preparing…")
+            progress_bar = st.progress(0, text=t("Preparing…", "准备中…"))
             status_text = st.empty()
 
             # 真正执行摄取（包含分类、向量入库、BM25 建索引等）
@@ -288,7 +291,7 @@ def render() -> None:
     st.divider()
 
     # ── Document management section ────────────────────────────────
-    st.subheader("🗑️ Manage Documents")
+    st.subheader(t("🗑️ Manage Documents", "🗑️ 文档管理"))
 
     # Collection 选择框放在 Manage Documents 下方，既用作列表筛选，也作为上传时的“目标库”选择。
     COLLECTION_FILTER_OPTIONS = [
@@ -303,18 +306,18 @@ def render() -> None:
 
     def _collection_label(value: str) -> str:
         mapping = {
-            "all": "all（显示所有 collection）",
-            "default": "default（通用库）",
-            "chitchat": "chitchat（闲聊库）",
-            "escalation": "escalation（投诉/升级库）",
-            "fabric_care": "fabric_care（洗护知识库）",
-            "returns": "returns（退货/售后库）",
-            "styling": "styling（穿搭建议库）",
+            "all": "all (show all collections)",
+            "default": "default (general knowledge)",
+            "chitchat": "chitchat (small talk)",
+            "escalation": "escalation (complaints / escalation)",
+            "fabric_care": "fabric_care (fabric care knowledge)",
+            "returns": "returns (returns / after-sales)",
+            "styling": "styling (styling advice)",
         }
         return mapping.get(value, value)
 
     collection_filter = st.selectbox(
-        "Collection 过滤器",
+        t("Collection Filter", "Collection 过滤器"),
         options=COLLECTION_FILTER_OPTIONS,
         index=COLLECTION_FILTER_OPTIONS.index(current_collection)
         if current_collection in COLLECTION_FILTER_OPTIONS
@@ -322,8 +325,10 @@ def render() -> None:
         format_func=_collection_label,
         key="collection_filter",
         help=(
-            "选择要查看/管理的知识库；选择 all 时列表显示所有已摄取文档，"
-            "但新增上传会默认写入 default。"
+            t(
+                "Choose which knowledge base to view or manage. When `all` is selected, the list shows every ingested document, while new uploads will still be written to `default` by default.",
+                "选择要查看或管理的知识库。选择 `all` 时，列表会显示所有已导入文档，但新上传文件仍默认写入 `default`。",
+            )
         ),
     )
 
@@ -338,7 +343,7 @@ def render() -> None:
         # 始终从底层加载"物理"所有文档，然后在 Dashboard 层按逻辑标签过滤。
         docs = svc.list_documents(collection=None)
     except Exception as exc:
-        st.error(f"Failed to load documents: {exc}")
+        st.error(t("Failed to load documents: ", "加载文档失败：") + str(exc))
         return
 
     # 为每个文档打上 logical_collection 标签
@@ -351,7 +356,7 @@ def render() -> None:
         docs = [d for d in docs if d.get("logical_collection") == collection_filter]
 
     if not docs:
-        st.info("No documents ingested yet.")
+        st.info(t("No documents ingested yet.", "还没有导入任何文档。"))
         return
 
     for idx, doc in enumerate(docs):
@@ -361,9 +366,9 @@ def render() -> None:
             st.markdown(f"**{doc['source_path']}**")
             # 第二行单独展示 collection / chunks / images 信息，视觉上更清晰
             st.caption(
-                f"collection: `{doc.get('logical_collection', '—')}` | "
-                f"chunks: {doc['chunk_count']} | "
-                f"images: {doc['image_count']}"
+                f"{t('collection', 'collection')}: `{doc.get('logical_collection', '—')}` | "
+                f"{t('chunks', 'chunks')}: {doc['chunk_count']} | "
+                f"{t('images', 'images')}: {doc['image_count']}"
             )
         with col_actions:
             # 左侧：修改 collection（通过逻辑标签实现“移动”效果）
@@ -384,14 +389,14 @@ def render() -> None:
                 default_index = 0
 
             new_collection = st.selectbox(
-                "Move to",
+                t("Move to", "移动到"),
                 options=options,
                 index=default_index,
                 key=f"move_collection_{idx}",
             )
             move_col, delete_col = st.columns(2)
             with move_col:
-                if st.button("↪️ Move", key=f"move_{idx}"):
+                if st.button(t("↪️ Move", "↪️ 移动"), key=f"move_{idx}"):
                     try:
                         # 仅更新 Dashboard 层的逻辑 collection 标签，不触碰底层物理存储。
                         overrides = _load_collection_overrides()
@@ -402,14 +407,16 @@ def render() -> None:
 
                         old_collection = doc.get("logical_collection", "default")
                         st.success(
-                            f"Updated logical collection from `{old_collection}` "
-                            f"to `{new_collection}` for this document."
+                            t(
+                                f"Updated logical collection from `{old_collection}` to `{new_collection}` for this document.",
+                                f"该文档的逻辑 collection 已从 `{old_collection}` 更新为 `{new_collection}`。",
+                            )
                         )
                         st.rerun()
                     except Exception as exc:
-                        st.error(f"Move failed: {exc}")
+                        st.error(t("Move failed: ", "移动失败：") + str(exc))
             with delete_col:
-                if st.button("🗑️ Delete", key=f"del_{idx}"):
+                if st.button(t("🗑️ Delete", "🗑️ 删除"), key=f"del_{idx}"):
                     try:
                         result = svc.delete_document(
                             source_path=doc["source_path"],
@@ -418,11 +425,13 @@ def render() -> None:
                         )
                         if result.success:
                             st.success(
-                                f"Deleted: {result.chunks_deleted} chunks, "
-                                f"{result.images_deleted} images removed."
+                                t(
+                                    f"Deleted: {result.chunks_deleted} chunks, {result.images_deleted} images removed.",
+                                    f"已删除：{result.chunks_deleted} 个分块，{result.images_deleted} 张图片。",
+                                )
                             )
                             st.rerun()
                         else:
-                            st.warning(f"Partial delete. Errors: {result.errors}")
+                            st.warning(t("Partial delete. Errors: ", "部分删除成功。错误：") + str(result.errors))
                     except Exception as exc:
-                        st.error(f"Delete failed: {exc}")
+                        st.error(t("Delete failed: ", "删除失败：") + str(exc))

@@ -24,6 +24,7 @@ from src.core.query_engine.hybrid_search import HybridSearchConfig, create_hybri
 from src.core.query_engine.reranker import create_core_reranker
 from src.core.settings import load_settings
 from src.libs.evaluator.evaluator_factory import EvaluatorFactory
+from src.observability.dashboard.i18n import t
 from src.observability.dashboard.services.scoring_engine import ScoringEngine, StrategyMetrics
 
 logger = logging.getLogger(__name__)
@@ -39,10 +40,10 @@ ARENA_QUALITY_WEIGHT = 0.34
 
 def render() -> None:
     """Render the evaluation panel page."""
-    st.header("📏 Evaluation Panel")
-    st.caption("对比基线检索与图增强检索，复用 LLM Arena 评分体系。")
+    st.header(t("📏 Evaluation Panel", "📏 评测面板"))
+    st.caption(t("Compare baseline retrieval with graph-enhanced retrieval using the same scoring framework as LLM Arena.", "对比基线检索与图增强检索，并复用与 LLM Arena 相同的评分体系。"))
 
-    run_tab, history_tab = st.tabs(["▶️ 运行压测", "📈 历史结果"])
+    run_tab, history_tab = st.tabs([t("▶️ Run Benchmark", "▶️ 运行压测"), t("📈 History", "📈 历史结果")])
     with run_tab:
         _render_run_tab()
     with history_tab:
@@ -59,58 +60,61 @@ def _create_scoring_engine() -> ScoringEngine:
 
 
 def _render_run_tab() -> None:
-    st.subheader("压测配置")
+    st.subheader(t("Benchmark Configuration", "压测配置"))
     c1, c2, c3 = st.columns(3)
     with c1:
-        backend = st.selectbox("Evaluator Backend", ["ragas", "composite", "custom"], index=0)
+        backend = st.selectbox(t("Evaluator Backend", "评测后端"), ["ragas", "composite", "custom"], index=0)
     with c2:
         top_k = int(st.number_input("Top-K", min_value=1, max_value=50, value=5))
     with c3:
-        exec_mode = st.radio("执行模式", ["串行", "并行"], index=1, horizontal=True)
+        exec_mode = st.radio(t("Execution Mode", "执行模式"), [t("Sequential", "串行"), t("Parallel", "并行")], index=1, horizontal=True)
 
     st.caption(
-        "串行：同一条测试样本按策略一个个顺序执行；并行：同一条样本的多策略同时执行（通常更快）。"
+        t(
+            "Sequential: run strategies one by one for each test sample. Parallel: run multiple strategies on the same sample at the same time (usually faster).",
+            "串行：每条测试样本按策略逐个执行。并行：同一条样本的多种策略同时执行，通常更快。",
+        )
     )
 
     c4, c5 = st.columns(2)
     with c4:
-        collection = st.text_input("Collection (可选)", value="default").strip() or None
+        collection = st.text_input(t("Collection (optional)", "Collection（可选）"), value="default").strip() or None
     with c5:
-        golden_path_str = st.text_input("Golden Test Set", value=str(DEFAULT_GOLDEN_SET))
+        golden_path_str = st.text_input(t("Golden Test Set", "Golden 测试集"), value=str(DEFAULT_GOLDEN_SET))
 
     strategy_mode = st.selectbox(
-        "检索策略模式",
+        t("Retrieval Strategy Mode", "检索策略模式"),
         options=[
-            "二路（Dense + Sparse + Rerank）",
-            "三路（Dense + Sparse + Graph + Rerank）",
-            "二路 vs 三路（横向对比）",
+            t("Two-path (Dense + Sparse + Rerank)", "二路（Dense + Sparse + Rerank）"),
+            t("Three-path (Dense + Sparse + Graph + Rerank)", "三路（Dense + Sparse + Graph + Rerank）"),
+            t("Two-path vs Three-path", "二路 vs 三路（横向对比）"),
         ],
         index=2,
     )
 
     c6, c7 = st.columns(2)
     with c6:
-        run_name = st.text_input("运行名称", value=time.strftime("%Y-%m-%d %H:%M:%S"))
+        run_name = st.text_input(t("Run Name", "运行名称"), value=time.strftime("%Y-%m-%d %H:%M:%S"))
     with c7:
-        run_note = st.text_input("备注", value="")
+        run_note = st.text_input(t("Notes", "备注"), value="")
 
     pending_payload = st.session_state.get(PENDING_SAVE_KEY)
     if isinstance(pending_payload, dict):
         st.info(
-            "已生成本次 leaderboard，可选择是否保存到历史。"
+            t("A leaderboard has been generated for this run. You can choose whether to save it to history.", "本次 leaderboard 已生成，你可以选择是否保存到历史记录。")
         )
         s1, s2 = st.columns(2)
-        if s1.button("💾 保存此次结果", key="eval_panel_save_latest"):
+        if s1.button(t("💾 Save This Result", "💾 保存此次结果"), key="eval_panel_save_latest"):
             _save_to_history(pending_payload)
             st.session_state.pop(PENDING_SAVE_KEY, None)
-            st.success("本次结果已保存到历史记录。")
-        if s2.button("🗑️ 丢弃此次结果", key="eval_panel_discard_latest"):
+            st.success(t("This result has been saved to history.", "本次结果已保存到历史记录。"))
+        if s2.button(t("🗑️ Discard This Result", "🗑️ 丢弃此次结果"), key="eval_panel_discard_latest"):
             st.session_state.pop(PENDING_SAVE_KEY, None)
-            st.warning("已丢弃当前未保存结果。")
+            st.warning(t("The current unsaved result has been discarded.", "当前未保存结果已被丢弃。"))
 
     golden_path = Path(golden_path_str)
     if not golden_path.exists():
-        st.warning(f"测试集不存在：`{golden_path}`")
+        st.warning(t(f"Test set does not exist: `{golden_path}`", f"测试集不存在：`{golden_path}`"))
         return
 
     saved = _load_progress()
@@ -119,17 +123,17 @@ def _render_run_tab() -> None:
         and not saved.get("completed", False)
         and saved.get("test_set_path") == str(golden_path)
         and int(saved.get("top_k", 0)) == top_k
-        and str(saved.get("strategy_mode", "二路 vs 三路（横向对比）")) == strategy_mode
+        and str(saved.get("strategy_mode", t("Two-path vs Three-path", "二路 vs 三路（横向对比）"))) == strategy_mode
     )
 
     b1, b2, b3 = st.columns(3)
-    start_clicked = b1.button("▶️ 开始压测", type="primary")
-    resume_clicked = b2.button("⏯️ 继续上次压测", disabled=not can_resume)
-    clear_clicked = b3.button("🗑️ 清除进度")
+    start_clicked = b1.button(t("▶️ Start Benchmark", "▶️ 开始压测"), type="primary")
+    resume_clicked = b2.button(t("⏯️ Resume Previous Run", "⏯️ 继续上次压测"), disabled=not can_resume)
+    clear_clicked = b3.button(t("🗑️ Clear Progress", "🗑️ 清除进度"))
 
     if clear_clicked:
         _clear_progress()
-        st.success("已清除压测进度。")
+        st.success(t("Benchmark progress cleared.", "压测进度已清除。"))
 
     if start_clicked or resume_clicked:
         _run_benchmark(
@@ -140,7 +144,7 @@ def _render_run_tab() -> None:
             strategy_mode=strategy_mode,
             run_name=run_name.strip() or time.strftime("%Y-%m-%d %H:%M:%S"),
             run_note=run_note.strip(),
-            parallel=(exec_mode == "并行"),
+            parallel=(exec_mode == t("Parallel", "并行")),
             resume_progress=saved if resume_clicked and can_resume else None,
         )
 
@@ -158,13 +162,13 @@ def _run_benchmark(
 ) -> None:
     test_cases = _load_test_cases(golden_path)
     if not test_cases:
-        st.warning("测试集为空，无法执行压测。")
+        st.warning(t("The test set is empty, so the benchmark cannot be executed.", "测试集为空，无法执行压测。"))
         return
 
     base_settings = load_settings()
     benchmark_settings = _build_benchmark_settings(base_settings, backend)
     benchmark_model = f"{benchmark_settings.llm.provider}-{benchmark_settings.llm.model}"
-    st.info(f"Ragas 裁判模型已强制绑定：`{benchmark_model}`")
+    st.info(t(f"The Ragas judge model is fixed to: `{benchmark_model}`", f"Ragas 裁判模型已固定为：`{benchmark_model}`"))
 
     evaluator = EvaluatorFactory.create(benchmark_settings)
     from src.core.response.rag_generator import RAGGenerator
@@ -175,9 +179,9 @@ def _run_benchmark(
         {"name": "Strategy A: Baseline (Dense+Sparse+Rerank)", "use_graph": False},
         {"name": "Strategy B: Graph (Dense+Sparse+Graph+Rerank)", "use_graph": True},
     ]
-    if strategy_mode.startswith("二路（"):
+    if strategy_mode.startswith("Two-path"):
         strategy_defs = [all_defs[0]]
-    elif strategy_mode.startswith("三路（"):
+    elif strategy_mode.startswith("Three-path"):
         strategy_defs = [all_defs[1]]
     else:
         strategy_defs = all_defs
@@ -231,7 +235,7 @@ def _run_benchmark(
                     done_tasks += 1
                     progress_bar.progress(min(1.0, done_tasks / total_tasks))
                     status_text.markdown(
-                        f"进度：**{done_tasks}/{total_tasks}** · 当前 Query：`{query[:60]}` · 策略：`{strategy_name}`"
+                        f"Progress: **{done_tasks}/{total_tasks}** · Current Query: `{query[:60]}` · Strategy: `{strategy_name}`"
                     )
         else:
             for s in strategy_defs:
@@ -252,7 +256,7 @@ def _run_benchmark(
                 done_tasks += 1
                 progress_bar.progress(min(1.0, done_tasks / total_tasks))
                 status_text.markdown(
-                    f"进度：**{done_tasks}/{total_tasks}** · 当前 Query：`{query[:60]}` · 策略：`{strategy_name}`"
+                    f"Progress: **{done_tasks}/{total_tasks}** · Current Query: `{query[:60]}` · Strategy: `{strategy_name}`"
                 )
 
         _save_progress(
@@ -292,7 +296,7 @@ def _run_benchmark(
             "completed": True,
         }
     )
-    st.success("压测完成，leaderboard 已生成。可点击“保存此次结果”写入历史。")
+    st.success(t("Benchmark completed. The leaderboard has been generated. Click `Save This Result` to write it into history.", "压测完成，leaderboard 已生成。点击“保存此次结果”即可写入历史。"))
 
 
 def _run_single_case(
@@ -463,19 +467,19 @@ def _compute_aggregated_metrics(
 
 
 def _display_leaderboard(all_metrics: List[StrategyMetrics], scoring_engine: ScoringEngine) -> None:
-    st.subheader("🏆 Leaderboard")
+    st.subheader(t("🏆 Leaderboard", "🏆 排行榜"))
     if not all_metrics:
-        st.info("暂无可展示结果。")
+        st.info(t("No results are available to display yet.", "暂无可展示结果。"))
         return
 
-    with st.expander("📊 评分规则说明", expanded=False):
+    with st.expander(t("📊 Scoring Rules", "📊 评分规则说明"), expanded=False):
         st.markdown(
             """
-传统综合评分（与 LLM Arena 一致）：
-- 成本/延迟/质量分别做 Min-Max 归一化
-- 质量为正向指标（越高越好）
-- 成本/延迟为逆向指标（越低越好）
-- 综合分 = 质量(34%) + 延迟(33%) + 成本(33%)
+Traditional composite score (aligned with LLM Arena):
+- Cost, latency, and quality each use Min-Max normalization
+- Quality is a positive metric (higher is better)
+- Cost and latency are inverse metrics (lower is better)
+- Composite score = quality (34%) + latency (33%) + cost (33%)
 """
         )
 
@@ -483,23 +487,23 @@ def _display_leaderboard(all_metrics: List[StrategyMetrics], scoring_engine: Sco
         m.composite_score = scoring_engine.compute_composite_score(m, all_metrics)  # type: ignore[attr-defined]
     all_metrics.sort(key=lambda x: getattr(x, "composite_score", 0.0), reverse=True)
 
-    def to_cn_rank(rank: int) -> str:
-        mapping = {1: "第一名", 2: "第二名", 3: "第三名"}
-        return mapping.get(rank, f"第{rank}名")
+    def to_rank_label(rank: int) -> str:
+        mapping = {1: "1st", 2: "2nd", 3: "3rd"}
+        return mapping.get(rank, f"{rank}th")
 
     rows: List[Dict[str, Any]] = []
     for i, m in enumerate(all_metrics, start=1):
         rows.append(
             {
-                "排名": to_cn_rank(i),
-                "策略": m.strategy_name,
-                "综合评分": f"{getattr(m, 'composite_score', 0.0):.2f}",
-                "成功率(%)": f"{m.success_rate * 100:.2f}",
-                "平均生成时长(s)": f"{m.avg_latency_s:.3f}",
-                "平均评估时长(s)": f"{m.avg_eval_time_s:.3f}",
-                "端到端时延(s)": f"{getattr(m, 'avg_e2e_latency_s', 0.0):.3f}",
-                "单次平均成本($)": f"{m.avg_cost_per_query:.6f}",
-                "总成本($)": f"{m.total_cost:.6f}",
+                "Rank": to_rank_label(i),
+                "Strategy": m.strategy_name,
+                "Composite Score": f"{getattr(m, 'composite_score', 0.0):.2f}",
+                "Success Rate (%)": f"{m.success_rate * 100:.2f}",
+                "Avg Generation Time (s)": f"{m.avg_latency_s:.3f}",
+                "Avg Evaluation Time (s)": f"{m.avg_eval_time_s:.3f}",
+                "End-to-End Latency (s)": f"{getattr(m, 'avg_e2e_latency_s', 0.0):.3f}",
+                "Avg Cost / Query ($)": f"{m.avg_cost_per_query:.6f}",
+                "Total Cost ($)": f"{m.total_cost:.6f}",
                 "Faithfulness": f"{(m.avg_faithfulness or 0.0):.3f}",
                 "Answer Relevancy": f"{(m.avg_answer_relevancy or 0.0):.3f}",
                 "Context Precision": f"{(m.avg_context_precision or 0.0):.3f}",
@@ -507,13 +511,13 @@ def _display_leaderboard(all_metrics: List[StrategyMetrics], scoring_engine: Sco
         )
     st.dataframe(rows, width="stretch")
 
-    st.markdown("### 📈 详细评分分解")
-    st.markdown("**按策略展示综合分与关键质量/效率指标（同 LLM Arena 打分口径）**")
+    st.markdown(t("### 📈 Detailed Score Breakdown", "### 📈 详细评分分解"))
+    st.markdown(t("**Composite score and key quality/efficiency metrics by strategy, using the same scoring logic as LLM Arena**", "**按策略展示综合分与关键质量/效率指标，并使用与 LLM Arena 相同的评分逻辑**"))
     for m in all_metrics:
         st.markdown(f"### {m.strategy_name}")
         st.markdown(
-            f"- 综合评分: {getattr(m, 'composite_score', 0.0):.2f} | 平均质量: {m.avg_quality_score * 100:.2f}% | "
-            f"平均生成时长: {m.avg_latency_s:.3f}s | 单次平均成本: ${m.avg_cost_per_query:.6f}"
+            f"- Composite Score: {getattr(m, 'composite_score', 0.0):.2f} | Average Quality: {m.avg_quality_score * 100:.2f}% | "
+            f"Average Generation Time: {m.avg_latency_s:.3f}s | Average Cost / Query: ${m.avg_cost_per_query:.6f}"
         )
         st.markdown(
             f"- Faithfulness: {(m.avg_faithfulness or 0.0):.3f} | "
@@ -528,17 +532,17 @@ def _display_visualizations(all_metrics: List[StrategyMetrics]) -> None:
     try:
         import matplotlib.pyplot as plt
     except ImportError:
-        st.info("未安装 matplotlib，跳过图表展示。")
+        st.info(t("`matplotlib` is not installed, so chart rendering is skipped.", "未安装 `matplotlib`，已跳过图表渲染。"))
         return
 
-    tab1, tab2, tab3 = st.tabs(["质量分析", "成本分析", "运行时间分析"])
+    tab1, tab2, tab3 = st.tabs([t("Quality Analysis", "质量分析"), t("Cost Analysis", "成本分析"), t("Runtime Analysis", "运行时间分析")])
 
     with tab1:
         sorted_m = sorted(all_metrics, key=lambda m: m.avg_quality_score, reverse=True)
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.barh([m.strategy_name for m in sorted_m], [m.avg_quality_score * 100 for m in sorted_m], color="#2ca02c")
-        ax.set_title("质量分析（分数从高到低）", pad=20)
-        ax.set_xlabel("平均质量得分 (%)")
+        ax.set_title("Quality Analysis (highest score first)", pad=20)
+        ax.set_xlabel("Average Quality Score (%)")
         ax.invert_yaxis()
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
@@ -547,8 +551,8 @@ def _display_visualizations(all_metrics: List[StrategyMetrics]) -> None:
         sorted_m = sorted(all_metrics, key=lambda m: m.avg_cost_per_query)
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.barh([m.strategy_name for m in sorted_m], [m.avg_cost_per_query for m in sorted_m], color="#1f77b4")
-        ax.set_title("成本分析（从低到高）", pad=20)
-        ax.set_xlabel("单次平均成本 ($)")
+        ax.set_title("Cost Analysis (lowest first)", pad=20)
+        ax.set_xlabel("Average Cost / Query ($)")
         ax.invert_yaxis()
         st.pyplot(fig, use_container_width=True)
         plt.close(fig)
@@ -559,10 +563,10 @@ def _display_visualizations(all_metrics: List[StrategyMetrics]) -> None:
         gen = [m.avg_latency_s for m in sorted_m]
         ev = [m.avg_eval_time_s for m in sorted_m]
         fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(names, gen, marker="o", label="平均生成时长(s)")
-        ax.plot(names, ev, marker="o", label="平均评估时长(s)")
-        ax.set_title("运行时间分析（从快到慢）", pad=20)
-        ax.set_ylabel("秒 (s)")
+        ax.plot(names, gen, marker="o", label="Average Generation Time (s)")
+        ax.plot(names, ev, marker="o", label="Average Evaluation Time (s)")
+        ax.set_title("Runtime Analysis (fastest first)", pad=20)
+        ax.set_ylabel("Seconds (s)")
         ax.tick_params(axis="x", rotation=20)
         ax.legend()
         st.pyplot(fig, use_container_width=True)
@@ -570,12 +574,12 @@ def _display_visualizations(all_metrics: List[StrategyMetrics]) -> None:
 
 
 def _render_history_tab() -> None:
-    st.subheader("历史压测")
+    st.subheader(t("Benchmark History", "历史压测"))
     history = _load_history()
     if not history:
-        st.info("暂无历史记录。")
+        st.info(t("No history is available yet.", "暂无历史记录。"))
         return
-    st.caption("点击任意一条历史记录即可展开查看完整细节（可收回）。")
+    st.caption(t("Click any history entry to expand and inspect the full details.", "点击任意历史记录即可展开查看完整细节。"))
 
     indexed_recent_entries = list(reversed(list(enumerate(history))[-20:]))  # latest first
     rows: List[Dict[str, Any]] = []
@@ -586,48 +590,48 @@ def _render_history_tab() -> None:
         best_score = max([getattr(m, "composite_score", 0.0) for m in rebuilt], default=0.0)
         rows.append(
             {
-                "时间": entry.get("timestamp", "—"),
-                "运行名称": entry.get("run_name", "—"),
+                "Time": entry.get("timestamp", "—"),
+                "Run Name": entry.get("run_name", "—"),
                 "Top-K": entry.get("top_k", 0),
                 "Backend": entry.get("backend", "—"),
-                "最佳综合评分(重算)": f"{best_score:.2f}",
-                "备注": entry.get("note", ""),
-                "开发日记": "已记录" if str(entry.get("dev_diary", "")).strip() else "—",
-                "下一步建议": "已记录" if str(entry.get("next_step_suggestion", "")).strip() else "—",
+                "Best Composite Score (recomputed)": f"{best_score:.2f}",
+                "Notes": entry.get("note", ""),
+                "Dev Diary": "Recorded" if str(entry.get("dev_diary", "")).strip() else "—",
+                "Next Step Suggestion": "Recorded" if str(entry.get("next_step_suggestion", "")).strip() else "—",
             }
         )
     st.dataframe(rows, width="stretch")
 
-    st.markdown("### 抽屉式详情")
+    st.markdown(t("### Drawer Details", "### 抽屉式详情"))
     for idx, (history_idx, entry) in enumerate(indexed_recent_entries):
         metrics = rebuilt_metrics_cache.get(idx, [])
         best_score = max([getattr(m, "composite_score", 0.0) for m in metrics], default=0.0)
         title = (
             f"{entry.get('timestamp', '—')} | {entry.get('run_name', '—')} "
-            f"| 综合最高 {best_score:.2f}"
+            f"| Best Composite Score {best_score:.2f}"
         )
         with st.expander(title, expanded=False):
             c1, c2, c3, c4 = st.columns(4)
             with c1:
                 st.metric("Top-K", f"{entry.get('top_k', 0)}")
             with c2:
-                st.metric("Backend", f"{entry.get('backend', '—')}")
+                st.metric(t("Backend", "后端"), f"{entry.get('backend', '—')}")
             with c3:
-                st.metric("策略模式", f"{entry.get('strategy_mode', '—')}")
+                st.metric(t("Strategy Mode", "策略模式"), f"{entry.get('strategy_mode', '—')}")
             with c4:
-                st.metric("运行名称", f"{entry.get('run_name', '—')}")
+                st.metric(t("Run Name", "运行名称"), f"{entry.get('run_name', '—')}")
 
             note = entry.get("note", "")
             if note:
-                st.caption(f"备注：{note}")
+                st.caption(f"Notes: {note}")
 
             if not metrics:
-                st.warning("该历史记录缺少可重建的策略明细，无法展示详细排行榜。")
+                st.warning(t("This history entry does not contain enough strategy detail to rebuild the leaderboard.", "该历史记录缺少足够的策略明细，无法重建排行榜。"))
                 continue
 
-            st.markdown("#### Leaderboard（历史重算）")
+            st.markdown(t("#### Leaderboard (recomputed)", "#### Leaderboard（历史重算）"))
             _display_leaderboard(metrics, _create_scoring_engine())
-            st.markdown("#### 对比图（历史重算）")
+            st.markdown(t("#### Comparison Charts (recomputed)", "#### 对比图（历史重算）"))
             _display_visualizations(metrics)
 
             _render_history_query_details(entry)
@@ -817,7 +821,7 @@ def _render_history_query_details(entry: Dict[str, Any]) -> None:
     if not isinstance(strategy_results, dict) or not strategy_results:
         return
 
-    with st.expander("查看 Query 级明细", expanded=False):
+    with st.expander(t("View Query-Level Details", "查看 Query 级明细"), expanded=False):
         rows: List[Dict[str, Any]] = []
         for strategy_name, results in strategy_results.items():
             if not isinstance(results, list):
@@ -828,12 +832,12 @@ def _render_history_query_details(entry: Dict[str, Any]) -> None:
                 ragas = r.get("ragas_metrics", {}) if isinstance(r.get("ragas_metrics", {}), dict) else {}
                 rows.append(
                     {
-                        "策略": strategy_name,
+                        "Strategy": strategy_name,
                         "Query": str(r.get("query", ""))[:120],
-                        "成功": bool(r.get("success", False)),
-                        "端到端时延(s)": f"{_safe_float(r.get('e2e_latency_s'), 0.0):.3f}",
-                        "生成时长(s)": f"{_safe_float(r.get('gen_time_s'), 0.0):.3f}",
-                        "评估时长(s)": f"{_safe_float(r.get('eval_time_s'), 0.0):.3f}",
+                        "Success": bool(r.get("success", False)),
+                        "End-to-End Latency (s)": f"{_safe_float(r.get('e2e_latency_s'), 0.0):.3f}",
+                        "Generation Time (s)": f"{_safe_float(r.get('gen_time_s'), 0.0):.3f}",
+                        "Evaluation Time (s)": f"{_safe_float(r.get('eval_time_s'), 0.0):.3f}",
                         "Cost($)": f"{_safe_float(r.get('cost'), 0.0):.6f}",
                         "Faithfulness": f"{_safe_float(ragas.get('faithfulness'), 0.0):.3f}",
                         "Answer Rel.": f"{_safe_float(ragas.get('answer_relevancy'), 0.0):.3f}",
@@ -846,31 +850,31 @@ def _render_history_query_details(entry: Dict[str, Any]) -> None:
 
 def _render_history_memo_section(entry: Dict[str, Any], history_index: int) -> None:
     """Render editable memo area for a history drawer."""
-    st.markdown("#### 📝 开发备忘")
-    st.caption("用于记录本次开发日记与下一步建议，保存后会写入历史记录。")
+    st.markdown(t("#### 📝 Development Memo", "#### 📝 开发备忘"))
+    st.caption(t("Use this section to record a dev diary and suggested next steps. Saved content will be written back to history.", "用于记录本次开发日记与下一步建议，保存后会写回历史记录。"))
 
     diary_key = f"history_dev_diary_{history_index}"
     next_key = f"history_next_step_{history_index}"
     save_key = f"history_save_memo_{history_index}"
 
     dev_diary = st.text_area(
-        "开发日记",
+        "Dev Diary",
         value=str(entry.get("dev_diary", "")),
         height=120,
         key=diary_key,
-        placeholder="记录本次改动、遇到的问题、排查过程、结论等。",
+        placeholder="Record the changes made this time, issues encountered, debugging steps, conclusions, and so on.",
     )
     next_step = st.text_area(
-        "下一步建议",
+        "Next Step Suggestion",
         value=str(entry.get("next_step_suggestion", "")),
         height=90,
         key=next_key,
-        placeholder="例如：补齐测试、优化性能、修复遗留问题、验证线上数据等。",
+        placeholder="For example: add missing tests, optimize performance, fix legacy issues, validate production data, etc.",
     )
 
     cols = st.columns([1, 2])
     with cols[0]:
-        if st.button("💾 保存备忘", key=save_key):
+        if st.button(t("💾 Save Memo", "💾 保存备忘"), key=save_key):
             _update_history_entry_at(
                 index=history_index,
                 updates={
@@ -879,12 +883,12 @@ def _render_history_memo_section(entry: Dict[str, Any], history_index: int) -> N
                     "memo_updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 },
             )
-            st.success("备忘已保存。")
+            st.success(t("Memo saved.", "备忘已保存。"))
             st.rerun()
     with cols[1]:
         updated_at = str(entry.get("memo_updated_at", "")).strip()
         if updated_at:
-            st.caption(f"上次保存时间：{updated_at}")
+            st.caption(f"Last saved at: {updated_at}")
 
 
 def _mean(values: List[float]) -> float:

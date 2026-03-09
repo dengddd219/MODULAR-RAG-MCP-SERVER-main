@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
+from src.observability.dashboard.i18n import t
 from src.observability.dashboard.services.trace_service import TraceService
 
 logger = logging.getLogger(__name__)
@@ -21,18 +22,18 @@ logger = logging.getLogger(__name__)
 
 def render() -> None:
     """Render the Query Traces page."""
-    st.header("🔎 Query Traces")
+    st.header(t("🔎 Query Traces", "🔎 查询追踪"))
 
     svc = TraceService()
     traces = svc.list_traces(trace_type="query")
 
     if not traces:
-        st.info("No query traces recorded yet. Run a query first!")
+        st.info(t("No query traces recorded yet. Run a query first!", "还没有记录任何查询 trace。请先运行一次查询。"))
         return
 
     # ── Keyword filter ─────────────────────────────────────────────
     keyword = st.text_input(
-        "Search by query keyword",
+        t("Search by query keyword", "按查询关键词搜索"),
         value="",
         key="qt_keyword",
     )
@@ -45,7 +46,7 @@ def render() -> None:
             or kw in str(t.get("stages", [])).lower()
         ]
 
-    st.subheader(f"📋 Query History ({len(traces)})")
+    st.subheader(t(f"📋 Query History ({len(traces)})", f"📋 查询历史 ({len(traces)})"))
 
     for idx, trace in enumerate(traces):
         trace_id = trace.get("trace_id", "unknown")
@@ -66,15 +67,15 @@ def render() -> None:
 
         with st.expander(expander_title, expanded=(idx == 0)):
             # ── 1. Query overview ──────────────────────────────
-            st.markdown("#### 💬 Query")
+            st.markdown(t("#### 💬 Query", "#### 💬 查询"))
             col_q, col_meta = st.columns([3, 1])
             with col_q:
                 st.markdown(f"> {query_text}")
             with col_meta:
                 source_emoji = "🤖" if source == "mcp" else "📡"
-                st.markdown(f"**Source:** {source_emoji} `{source}`")
+                st.markdown(f"**{t('Source', '来源')}:** {source_emoji} `{source}`")
                 st.markdown(f"**Top-K:** `{meta.get('top_k', '—')}`")
-                st.markdown(f"**Collection:** `{meta.get('collection', '—')}`")
+                st.markdown(f"**{t('Collection', 'Collection')}:** `{meta.get('collection', '—')}`")
 
             st.divider()
 
@@ -94,15 +95,15 @@ def render() -> None:
 
             rc1, rc2, rc3, rc4, rc5 = st.columns(5)
             with rc1:
-                st.metric("Dense Hits", dense_count)
+                st.metric(t("Dense Hits", "Dense 命中数"), dense_count)
             with rc2:
-                st.metric("Sparse Hits", sparse_count)
+                st.metric(t("Sparse Hits", "Sparse 命中数"), sparse_count)
             with rc3:
-                st.metric("Fused", fusion_count or (dense_count + sparse_count))
+                st.metric(t("Fused", "融合后"), fusion_count or (dense_count + sparse_count))
             with rc4:
-                st.metric("After Rerank", rerank_count if rerank_d else "—")
+                st.metric(t("After Rerank", "重排后"), rerank_count if rerank_d else "—")
             with rc5:
-                st.metric("Total Time", total_label)
+                st.metric(t("Total Time", "总耗时"), total_label)
 
             st.divider()
 
@@ -110,13 +111,13 @@ def render() -> None:
             main_stage_names = ("query_processing", "dense_retrieval", "sparse_retrieval", "fusion", "rerank")
             main_timings = [t for t in timings if t["stage_name"] in main_stage_names]
             if main_timings:
-                st.markdown("#### ⏱️ Stage Timings")
+                st.markdown(t("#### ⏱️ Stage Timings", "#### ⏱️ 阶段耗时"))
                 chart_data = {t["stage_name"]: t["elapsed_ms"] for t in main_timings}
                 st.bar_chart(chart_data, horizontal=True)
                 st.table([
                     {
-                        "Stage": t["stage_name"],
-                        "Elapsed (ms)": round(t["elapsed_ms"], 2),
+                        t("Stage", "阶段"): t["stage_name"],
+                        t("Elapsed (ms)", "耗时 (ms)"): round(t["elapsed_ms"], 2),
                     }
                     for t in main_timings
                 ])
@@ -124,7 +125,7 @@ def render() -> None:
             st.divider()
 
             # ── 4. Per-stage detail tabs ───────────────────────
-            st.markdown("#### 🔍 Stage Details")
+            st.markdown(t("#### 🔍 Stage Details", "#### 🔍 阶段详情"))
 
             tab_defs = []
             if "query_processing" in stages_by_name:
@@ -159,7 +160,7 @@ def render() -> None:
                         elif key == "rerank":
                             _render_rerank_stage(data)
             else:
-                st.info("No stage details available.")
+                st.info(t("No stage details available.", "没有可用的阶段详情。"))
 
             # ── 5. Ragas Evaluate button ───────────────────────
             _render_evaluate_button(trace, idx)
@@ -181,14 +182,16 @@ def _render_evaluate_button(trace: Dict[str, Any], idx: int) -> None:
     col_btn, col_info = st.columns([1, 3])
     with col_btn:
         clicked = st.button(
-            "📏 Ragas Evaluate",
+            t("📏 Ragas Evaluate", "📏 Ragas 评测"),
             key=f"eval_trace_{idx}",
-            help="Re-run this query and score with Ragas (LLM-as-Judge)",
+            help=t("Re-run this query and score with Ragas (LLM-as-Judge)", "重新运行这条查询，并使用 Ragas（LLM-as-Judge）进行评分"),
         )
     with col_info:
         st.caption(
-            "Uses Ragas to score faithfulness, answer relevancy, "
-            "and context precision. Calls LLM — may take a few seconds."
+            t(
+                "Uses Ragas to score faithfulness, answer relevancy, and context precision. Calls LLM and may take a few seconds.",
+                "使用 Ragas 评估忠实度、答案相关性和上下文精确度。会调用 LLM，可能需要几秒钟。",
+            )
         )
 
     # Show previous result from session state
@@ -197,7 +200,7 @@ def _render_evaluate_button(trace: Dict[str, Any], idx: int) -> None:
         _display_eval_metrics(st.session_state[result_key])
 
     if clicked:
-        with st.spinner("Running Ragas evaluation…"):
+        with st.spinner(t("Running Ragas evaluation…", "正在运行 Ragas 评测…")):
             result = _evaluate_single_trace(query, meta)
         st.session_state[result_key] = result
         _display_eval_metrics(result)
@@ -322,7 +325,7 @@ def _display_eval_metrics(result: Dict[str, Any]) -> None:
 
     metrics = result.get("metrics", {})
     if not metrics:
-        st.warning("No metrics returned.")
+        st.warning(t("No metrics returned.", "没有返回任何指标。"))
         return
 
     st.markdown("**📏 Ragas Scores**")
@@ -372,20 +375,20 @@ def _render_query_processing_stage(data: Dict[str, Any]) -> None:
         st.markdown("**Extracted Keywords**")
         st.markdown(" · ".join(f"`{kw}`" for kw in keywords))
     else:
-        st.warning("No keywords extracted.")
+        st.warning(t("No keywords extracted.", "未提取到关键词。"))
 
 
 def _render_retrieval_stage(data: Dict[str, Any], label: str) -> None:
     """Render Dense or Sparse retrieval stage: method, counts, chunk list."""
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Method", data.get("method", "—"))
+        st.metric(t("Method", "方法"), data.get("method", "—"))
     with c2:
         extra = data.get("provider", data.get("keyword_count", "—"))
         extra_label = "Provider" if "provider" in data else "Keywords"
         st.metric(extra_label, extra)
     with c3:
-        st.metric("Results", data.get("result_count", 0))
+        st.metric(t("Results", "结果数"), data.get("result_count", 0))
 
     st.markdown(f"**Top-K requested:** `{data.get('top_k', '—')}`")
 
@@ -400,11 +403,11 @@ def _render_fusion_stage(data: Dict[str, Any]) -> None:
     """Render Fusion (RRF) stage: input lists, fused result count, chunk list."""
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Method", data.get("method", "rrf"))
+        st.metric(t("Method", "方法"), data.get("method", "rrf"))
     with c2:
-        st.metric("Input Lists", data.get("input_lists", "—"))
+        st.metric(t("Input Lists", "输入列表数"), data.get("input_lists", "—"))
     with c3:
-        st.metric("Fused Results", data.get("result_count", 0))
+        st.metric(t("Fused Results", "融合结果数"), data.get("result_count", 0))
 
     st.markdown(f"**Top-K:** `{data.get('top_k', '—')}`")
 
@@ -412,26 +415,26 @@ def _render_fusion_stage(data: Dict[str, Any]) -> None:
     if chunks:
         _render_chunk_list(chunks, prefix="fusion_chunk")
     else:
-        st.info("No fusion results.")
+        st.info(t("No fusion results.", "没有融合结果。"))
 
 
 def _render_rerank_stage(data: Dict[str, Any]) -> None:
     """Render Rerank stage: method, input/output counts, reranked chunk list."""
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("Method", data.get("method", "—"))
+        st.metric(t("Method", "方法"), data.get("method", "—"))
     with c2:
-        st.metric("Provider", data.get("provider", "—"))
+        st.metric(t("Provider", "提供方"), data.get("provider", "—"))
     with c3:
-        st.metric("Input", data.get("input_count", "—"))
+        st.metric(t("Input", "输入数"), data.get("input_count", "—"))
     with c4:
-        st.metric("Output", data.get("output_count", "—"))
+        st.metric(t("Output", "输出数"), data.get("output_count", "—"))
 
     chunks = data.get("chunks", [])
     if chunks:
         _render_chunk_list(chunks, prefix="rerank_chunk")
     else:
-        st.info("No reranked results.")
+        st.info(t("No reranked results.", "没有重排结果。"))
 
 
 def _render_chunk_list(chunks: List[Dict[str, Any]], prefix: str = "chunk") -> None:
@@ -472,7 +475,7 @@ def _render_chunk_list(chunks: List[Dict[str, Any]], prefix: str = "chunk") -> N
                     label_visibility="collapsed",
                 )
             else:
-                st.caption("_No text available_")
+                st.caption(t("_No text available_", "_没有可用文本_"))
 
 
 def _find_stage(timings, name):

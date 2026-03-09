@@ -34,6 +34,7 @@ from sklearn.metrics import classification_report
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import LabelEncoder
+from sklearn.utils.class_weight import compute_sample_weight
 from xgboost import XGBClassifier
 
 
@@ -83,6 +84,13 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=str(DEFAULT_OUTPUT_PATH),
         help="训练好的模型流水线保存位置 (默认: data/models/intent_classifier.pkl)。",
+    )
+    parser.add_argument(
+        "--classifier",
+        type=str,
+        choices=["xgboost", "logistic"],
+        default="xgboost",
+        help="分类器类型：xgboost（默认）或 logistic。",
     )
     return parser.parse_args()
 
@@ -149,6 +157,11 @@ def load_dataset(
 
     texts = df[text_column].values
 
+    unique_labels, counts = np.unique(df[label_column].astype(str).values, return_counts=True)
+    print("[intent-train] 标签分布:")
+    for label, count in zip(unique_labels, counts):
+        print(f"  - {label}: {count} ({count / len(df) * 100:.1f}%)")
+
     # 将分类标签（如 "returns"）转换为数字（如 0, 1, 2...）
     label_encoder = LabelEncoder()
     labels = label_encoder.fit_transform(df[label_column].astype(str).values)
@@ -156,37 +169,43 @@ def load_dataset(
     return texts, labels, label_encoder
 
 
-def build_pipeline(label_encoder: LabelEncoder) -> Pipeline:
+def build_pipeline(label_encoder: LabelEncoder, classifier_type: str = "xgboost") -> Pipeline:
     """构建意图分类流水线。
 
     流水线包含：
     - TfidfVectorizer: 提取词级特征，非常适合短查询文本。
-    - XGBClassifier: 梯度提升树模型，在中小规模数据集上表现极其强悍。
+    - XGBClassifier / LogisticRegression: 多分类器。
     """
-    # 文本转向量：这里使用了 1-2 元语法，并过滤了极低频词汇
+    # 文本转向量：短文本意图分类对 unigram+bigram 往往更稳健。
     vectorizer = TfidfVectorizer(
-        # 仅使用 unigram，降低二元组合带来的噪音
-        ngram_range=(1, 1),
-        # 至少在 3 个样本中出现，过滤掉极低频特征
-        min_df=3,
-        # 更严格的高频词过滤阈值
-        max_df=0.9,
+        ngram_range=(1, 2),
+        min_df=2,
+        max_df=0.95,
         sublinear_tf=True,
     )
 
-    # XGBoost 分类器设置
-    classifier = XGBClassifier(
-        objective="multi:softprob",  # 多分类任务，输出概率分布
-        eval_metric="mlogloss",      # 使用多分类对数损失作为评估指标
-        max_depth=4,                 # 更浅的树，降低过拟合风险
-        n_estimators=400,            # 增加树的数量，配合更小学习率
-        learning_rate=0.05,          # 更小学习率，提升泛化能力
-        subsample=0.8,               # 略微减少每棵树使用的数据比例
-        colsample_bytree=0.8,        # 略微减少每棵树使用的特征比例
-        reg_lambda=2.0,              # 增强 L2 正则
-        reg_alpha=0.5,               # 增强 L1 正则
-        n_jobs=4,                    # 使用 4 个 CPU 核心并行训练
-    )
+    if classifier_type == "xgboost":
+        classifier = XGBClassifier(
+            objective="multi:softprob",
+            eval_metric="mlogloss",
+            max_depth=4,
+            n_estimators=300,
+            learning_rate=0.05,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            reg_lambda=2.0,
+            reg_alpha=0.5,
+            n_jobs=4,
+        )
+    else:
+        from sklearn.linear_model import LogisticRegression
+
+        classifier = LogisticRegression(
+            max_iter=2000,
+            C=1.0,
+            solver="lbfgs",
+            class_weight="balanced",
+        )
 
     # 使用 ColumnTransformer 专门处理指定的文本列
     text_transformer = ColumnTransformer(
@@ -234,9 +253,13 @@ def main() -> int:
     print(f"[intent-train] 训练样本数: {len(X_train)}, 验证样本数: {len(X_val)}")
 
     # 构建并训练流水线
-    pipeline = build_pipeline(label_encoder)
+    pipeline = build_pipeline(label_encoder, args.classifier)
     # 因为 ColumnTransformer 期望输入是二维数组，所以需要 reshape
-    pipeline.fit(X_train.reshape(-1, 1), y_train)
+    fit_kwargs = {}
+    if args.classifier == "xgboost":
+        sample_weight = compute_sample_weight(class_weight="balanced", y=y_train)
+        fit_kwargs["clf__sample_weight"] = sample_weight
+    pipeline.fit(X_train.reshape(-1, 1), y_train, **fit_kwargs)
 
     print("[intent-train] 正在验证集上评估模型...")
     y_pred = pipeline.predict(X_val.reshape(-1, 1))
@@ -249,6 +272,7 @@ def main() -> int:
         digits=4,
     )
     print(report)
+    print(f"[intent-train] classifier={args.classifier}")
 
     # 确保输出目录存在
     output_dir = output_path.parent

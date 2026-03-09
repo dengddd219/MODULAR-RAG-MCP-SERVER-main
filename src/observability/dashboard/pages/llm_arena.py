@@ -38,6 +38,7 @@ from src.libs.llm.base_llm import Message
 from src.libs.llm.model_evaluator import ModelEvaluator, ModelMetrics
 from src.libs.llm.model_manager import ModelConfig, ModelManager
 from src.libs.vector_store.vector_store_factory import VectorStoreFactory
+from src.observability.dashboard.i18n import t
 from src.observability.dashboard.services.scoring_engine import (
     ScoringEngine,
     StrategyMetrics,
@@ -109,10 +110,12 @@ TIER_3_MODELS = [
 
 def render() -> None:
     """Render the LLM Arena page."""
-    st.header("🏟️ LLM Arena (模型竞技与调优台)")
+    st.header(t("🏟️ LLM Arena", "🏟️ LLM 竞技场"))
     st.markdown(
-        "通过量化数据（成本、延迟、质量、**细粒度路由准确率**）来证明"
-        "**'小模型 + 大模型'混合策略**在 C 端场景下的优越性。"
+        t(
+            "Use quantitative metrics such as cost, latency, quality, and **fine-grained routing accuracy** to validate the value of a **small-model + large-model hybrid strategy** in end-user scenarios.",
+            "通过成本、延迟、质量以及**细粒度路由准确率**等量化指标，验证**小模型 + 大模型混合策略**在终端用户场景中的价值。",
+        )
     )
     
     # Initialize session state
@@ -121,7 +124,7 @@ def render() -> None:
         st.session_state.arena_models_registered = True
     
     # Tab navigation (Exhaustive Benchmark as default)
-    tab1, tab2 = st.tabs(["📊 Exhaustive Benchmark", "🎮 Interactive Playground"])
+    tab1, tab2 = st.tabs([t("📊 Exhaustive Benchmark", "📊 穷举压测"), t("🎮 Interactive Playground", "🎮 交互试验台")])
     
     with tab1:
         _render_exhaustive_benchmark()
@@ -160,7 +163,7 @@ def _initialize_models() -> None:
         
         if "ollama" not in available_providers:
             logger.warning("Ollama provider not available, skipping Tier 2 models")
-            st.warning("⚠️ Ollama provider 未实现，跳过本地模型注册")
+            st.warning(t("⚠️ Ollama provider is not implemented. Skipping local model registration.", "⚠️ Ollama provider 尚未实现，跳过本地模型注册。"))
         else:
             registered_tier2 = 0
             for model_name in TIER_2_MODELS:
@@ -192,7 +195,7 @@ def _initialize_models() -> None:
         # Check if OpenAI provider is available (required for all API models)
         if "openai" not in available_providers:
             logger.warning("OpenAI provider not available, skipping Tier 3 models")
-            st.warning("⚠️ OpenAI provider 未实现，跳过 API 模型注册")
+            st.warning(t("⚠️ OpenAI provider is not implemented. Skipping API model registration.", "⚠️ OpenAI provider 尚未实现，跳过 API 模型注册。"))
         else:
             # Model name mapping: display_name -> actual model name for API
             # All use OpenAI-compatible format via 智增增 proxy
@@ -208,7 +211,7 @@ def _initialize_models() -> None:
             
             if not api_key:
                 logger.warning("API key not found in settings, Tier 3 models may not work")
-                st.warning("⚠️ 未找到 API Key，API 模型可能无法使用")
+                st.warning(t("⚠️ API key was not found. API models may be unavailable.", "⚠️ 未找到 API key，API 模型可能不可用。"))
             
             # Base URL mapping for different models via 智增增 proxy
             # Different models may use different base_url endpoints
@@ -254,34 +257,34 @@ def _initialize_models() -> None:
             
             if skipped_models:
                 logger.warning(f"Skipped {len(skipped_models)} models: {skipped_models}")
-                st.warning(f"⚠️ {len(skipped_models)} 个模型注册失败，请检查日志")
+                st.warning(t(f"⚠️ {len(skipped_models)} model registrations failed. Check the logs for details.", f"⚠️ 有 {len(skipped_models)} 个模型注册失败，请检查日志。"))
             
             logger.info(f"Registered {registered_count} Tier 3 models successfully")
         
         st.session_state.arena_model_manager = manager
     except Exception as e:
         logger.error(f"Failed to initialize models: {e}")
-        st.error(f"模型初始化失败: {e}")
+        st.error(t("Model initialization failed: ", "模型初始化失败：") + str(e))
 
 
 def _render_interactive_playground() -> None:
     """Render Module A: Interactive Playground."""
-    st.subheader("🎮 Interactive Playground (单次对弈台)")
-    st.markdown("单次 Query 测试，直观感受系统表现。")
+    st.subheader(t("🎮 Interactive Playground", "🎮 交互试验台"))
+    st.markdown(t("Run a single query to inspect the system behavior interactively.", "运行单条查询，以交互方式观察系统行为。"))
     
     # Strategy selection (always visible)
-    st.markdown("#### 策略配置")
+    st.markdown(t("#### Strategy Configuration", "#### 策略配置"))
     col1, col2 = st.columns([2, 1])
     
     with col1:
         strategy_type = st.selectbox(
-            "执行策略",
-            options=["单模型", "双模型组合策略"],
+            t("Execution strategy", "执行策略"),
+            options=[t("Single model", "单模型"), t("Dual-model hybrid strategy", "双模型混合策略")],
             key="playground_strategy_type",
         )
     
     with col2:
-        if strategy_type == "单模型":
+        if strategy_type == t("Single model", "单模型"):
             all_models = _get_all_models()
             settings = load_settings()
             benchmark_id = st.session_state.get("benchmark_model_id", _get_benchmark_model_id(settings))
@@ -295,7 +298,7 @@ def _render_interactive_playground() -> None:
                 model_options.append(display_name)
             
             selected_model = st.selectbox(
-                "选择模型",
+                t("Select model", "选择模型"),
                 options=model_options,
                 key="playground_single_model",
             )
@@ -326,7 +329,7 @@ def _render_interactive_playground() -> None:
                 large_model_options.append(display_name)
             
             small_model = st.selectbox(
-                "小模型",
+                t("Small model", "小模型"),
                 options=small_model_options,
                 key="playground_small_model",
             )
@@ -334,7 +337,7 @@ def _render_interactive_playground() -> None:
             small_model = small_model.replace(" [Benchmark]", "")
             
             large_model = st.selectbox(
-                "大模型",
+                t("Large model", "大模型"),
                 options=large_model_options,
                 key="playground_large_model",
             )
@@ -344,30 +347,30 @@ def _render_interactive_playground() -> None:
     st.divider()
     
     # Query input
-    st.markdown("#### 查询输入")
+    st.markdown(t("#### Query Input", "#### 查询输入"))
     query = st.text_input(
-        "输入查询",
+        t("Enter query", "输入查询"),
         value="",
         key="playground_query",
-        placeholder="例如：什么是RAG？或者：请解释混合检索的工作原理",
+        placeholder=t("For example: What is RAG? Or: Explain how hybrid retrieval works.", "例如：什么是 RAG？或者：请解释混合检索是如何工作的。"),
     )
     
     # Execute button
     col_btn1, col_btn2 = st.columns([1, 3])
     with col_btn1:
-        execute_clicked = st.button("▶️ 执行查询", type="primary", key="playground_execute")
+        execute_clicked = st.button(t("▶️ Run Query", "▶️ 执行查询"), type="primary", key="playground_execute")
     
     if not query:
-        st.info("💡 请先配置策略和模型，然后输入查询以开始测试。")
+        st.info(t("💡 Configure a strategy and model selection, then enter a query to start testing.", "💡 请先配置策略和模型，然后输入查询开始测试。"))
     
     if execute_clicked:
         if not query:
-            st.warning("⚠️ 请输入查询后再执行。")
+            st.warning(t("⚠️ Please enter a query before running.", "⚠️ 请先输入查询再执行。"))
         else:
             _execute_playground_query(
                 query=query,
                 strategy_type=strategy_type,
-                small_model=small_model if strategy_type == "双模型组合策略" else None,
+                small_model=small_model if strategy_type == t("Dual-model hybrid strategy", "双模型混合策略") else None,
                 large_model=large_model,
             )
 
@@ -522,7 +525,7 @@ def _execute_rag_query(
     # Extract answer
     llm_answer = llm_response.content if hasattr(llm_response, "content") else str(llm_response)
     if not llm_answer or not llm_answer.strip():
-        llm_answer = "抱歉，无法生成回答。请重试。"
+        llm_answer = "Sorry, no answer could be generated. Please try again."
     else:
         llm_answer = llm_answer.strip()
     
@@ -556,7 +559,7 @@ def _execute_playground_query(
         # Determine which model to use based on user's manual selection
         selected_model_id: Optional[str] = None
         
-        if strategy_type == "双模型组合策略":
+        if strategy_type == "Dual-model hybrid strategy":
             # User manually selected small_model and large_model
             # For hybrid strategy, user needs to manually decide which model to use
             # We'll use small_model for "simple" queries and large_model for "complex" queries
@@ -623,7 +626,7 @@ def _execute_playground_query(
         # 综合评价指标可视化展示
         # ===================================================================
         
-        st.markdown("### 📊 综合评价指标")
+        st.markdown("### 📊 Overall Evaluation Metrics")
         
         # 计算所有指标值
         cost = metrics.calculate_cost()
@@ -656,7 +659,7 @@ def _execute_playground_query(
         
         if retrieved_chunks:
             try:
-                with st.spinner("正在运行 Ragas 评测..."):
+                with st.spinner("Running Ragas evaluation..."):
                     eval_start_time = time.monotonic()
                     settings = load_settings()
                     ragas_evaluator = RagasEvaluator(settings=settings)
@@ -668,11 +671,11 @@ def _execute_playground_query(
                     eval_time = time.monotonic() - eval_start_time
                     # Check which metrics are missing and use defaults
                     if "faithfulness" not in ragas_metrics:
-                        default_metrics_used.append("Faithfulness (忠实度)")
+                        default_metrics_used.append("Faithfulness")
                     if "answer_relevancy" not in ragas_metrics:
-                        default_metrics_used.append("Answer Relevancy (答案相关性)")
+                        default_metrics_used.append("Answer Relevancy")
                     if "context_precision" not in ragas_metrics:
-                        default_metrics_used.append("Context Precision (上下文精确度)")
+                        default_metrics_used.append("Context Precision")
                     
                     faithfulness = ragas_metrics.get("faithfulness", 0.5)
                     answer_relevancy = ragas_metrics.get("answer_relevancy", 0.5)
@@ -699,83 +702,83 @@ def _execute_playground_query(
             except Exception as e:
                 logger.exception("Ragas evaluation failed")
                 ragas_metrics = {}
-                default_metrics_used = ["Faithfulness (忠实度)", "Answer Relevancy (答案相关性)", "Context Precision (上下文精确度)"]
+                default_metrics_used = ["Faithfulness", "Answer Relevancy", "Context Precision"]
                 quality_score = 0.5
         else:
             # No retrieved chunks, all metrics use defaults
-            default_metrics_used = ["Faithfulness (忠实度)", "Answer Relevancy (答案相关性)", "Context Precision (上下文精确度)"]
+            default_metrics_used = ["Faithfulness", "Answer Relevancy", "Context Precision"]
         
         # 显示默认值提示（如果有）
         if default_metrics_used:
-            st.info(f"ℹ️ 以下指标使用了默认分数 (0.5): {', '.join(default_metrics_used)}")
+            st.info(f"ℹ️ The following metrics are using the default score (0.5): {', '.join(default_metrics_used)}")
         
         # Display timing information (small, subtle)
-        st.markdown("#### ⏱️ 运行时间")
+        st.markdown("#### ⏱️ Runtime")
         timing_col1, timing_col2 = st.columns(2)
         with timing_col1:
-            st.caption(f"生成时长: {metrics.latency_ms / 1000.0:.2f}秒")
+            st.caption(f"Generation time: {metrics.latency_ms / 1000.0:.2f}s")
         with timing_col2:
-            st.caption(f"测评时长: {eval_time:.2f}秒")
+            st.caption(f"Evaluation time: {eval_time:.2f}s")
         
         # 使用网格布局展示关键指标（更直观的可视化）
-        st.markdown("#### 📈 关键指标可视化")
+        st.markdown("#### 📈 Key Metrics Visualization")
         
         # 第一行：性能指标
-        st.markdown("**性能指标**")
+        st.markdown("**Performance Metrics**")
         perf_col1, perf_col2, perf_col3, perf_col4 = st.columns(4)
         with perf_col1:
             st.metric("TTFT", f"{metrics.latency_ms:.0f} ms")
             st.progress(_safe_progress(metrics.latency_ms, min_val=0.0, max_val=1000.0))
         with perf_col2:
-            st.metric("总延迟", f"{metrics.latency_ms:.0f} ms")
+            st.metric(t("Total latency", "总延迟"), f"{metrics.latency_ms:.0f} ms")
             st.progress(_safe_progress(metrics.latency_ms, min_val=0.0, max_val=5000.0))
         with perf_col3:
-            st.metric("Token", f"{metrics.total_tokens}")
+            st.metric(t("Token", "Token"), f"{metrics.total_tokens}")
             st.caption(f"P:{metrics.prompt_tokens} C:{metrics.completion_tokens}")
             st.progress(_safe_progress(metrics.total_tokens, min_val=0.0, max_val=2000.0))
         with perf_col4:
-            st.metric("成本", f"${cost:.6f}")
+            st.metric(t("Cost", "成本"), f"${cost:.6f}")
             st.progress(_safe_progress(cost, min_val=0.0, max_val=0.01))
         
         # 第二行：检索质量
-        st.markdown("**检索质量指标**")
+        st.markdown("**Retrieval Quality Metrics**")
         retrieval_col1, retrieval_col2, retrieval_col3, retrieval_col4 = st.columns(4)
         with retrieval_col1:
-            st.metric("文档块数", f"{num_chunks}")
+            st.metric(t("Chunks", "文档块数"), f"{num_chunks}")
             st.progress(_safe_progress(num_chunks, min_val=0.0, max_val=10.0))
         with retrieval_col2:
-            st.metric("平均分数", f"{avg_score:.4f}" if avg_score > 0 else "N/A")
+            st.metric(t("Average score", "平均分数"), f"{avg_score:.4f}" if avg_score > 0 else "N/A")
             if avg_score > 0:
                 st.progress(_safe_progress(avg_score))
         with retrieval_col3:
-            st.metric("最高分数", f"{max_score:.4f}" if max_score > 0 else "N/A")
+            st.metric(t("Highest score", "最高分数"), f"{max_score:.4f}" if max_score > 0 else "N/A")
             if max_score > 0:
                 st.progress(_safe_progress(max_score))
         with retrieval_col4:
-            st.metric("最低分数", f"{min_score:.4f}" if min_score > 0 else "N/A")
+            st.metric(t("Lowest score", "最低分数"), f"{min_score:.4f}" if min_score > 0 else "N/A")
             if min_score > 0:
                 st.progress(_safe_progress(min_score))
         
         # 第三行：回答质量
-        st.markdown("**回答质量指标**")
+        st.markdown("**Answer Quality Metrics**")
         answer_col1, answer_col2, answer_col3, answer_col4 = st.columns(4)
         with answer_col1:
-            st.metric("长度", f"{answer_length} 字符")
+            st.metric(t("Length", "长度"), t(f"{answer_length} chars", f"{answer_length} 字符"))
             st.progress(_safe_progress(answer_length, min_val=0.0, max_val=1000.0))
         with answer_col2:
-            st.metric("词数", f"{answer_word_count} 词")
+            st.metric(t("Word count", "词数"), t(f"{answer_word_count} words", f"{answer_word_count} 词"))
             st.progress(_safe_progress(answer_word_count, min_val=0.0, max_val=200.0))
         with answer_col3:
-            st.metric("引用", "✅ 是" if has_citations else "❌ 否")
+            st.metric(t("Citations", "引用"), t("✅ Yes", "✅ 是") if has_citations else t("❌ No", "❌ 否"))
             st.progress(1.0 if has_citations else 0.0)
         with answer_col4:
-            st.metric("每词成本", f"${cost_per_word:.8f}")
+            st.metric(t("Cost per word", "每词成本"), f"${cost_per_word:.8f}")
             st.progress(_safe_progress(cost_per_word, min_val=0.0, max_val=0.0001))
         
         # 第四行：Ragas 评测
-        st.markdown("**Ragas 质量评测**")
+        st.markdown("**Ragas Quality Evaluation**")
         if default_metrics_used:
-            st.info(f"ℹ️ 部分指标使用默认值 (0.5): {', '.join(default_metrics_used)}")
+            st.info(f"ℹ️ Some metrics are using default values (0.5): {', '.join(default_metrics_used)}")
         
         ragas_col1, ragas_col2, ragas_col3, ragas_col4 = st.columns(4)
         faithfulness = ragas_metrics.get("faithfulness", 0.5)
@@ -801,49 +804,49 @@ def _execute_playground_query(
             metric_label = "Faithfulness" + (" ⚠️" if is_default else "")
             st.metric(metric_label, f"{faithfulness:.4f}")
             st.progress(_safe_progress(faithfulness))
-            st.caption("忠实度" + (" (默认值)" if is_default else ""))
+            st.caption(t("Faithfulness", "忠实度") + (t(" (default)", "（默认值）") if is_default else ""))
         with ragas_col2:
             is_default = "answer_relevancy" not in ragas_metrics
             metric_label = "Answer Relevancy" + (" ⚠️" if is_default else "")
             st.metric(metric_label, f"{answer_relevancy:.4f}")
             st.progress(_safe_progress(answer_relevancy))
-            st.caption("答案相关性" + (" (默认值)" if is_default else ""))
+            st.caption(t("Answer relevancy", "答案相关性") + (t(" (default)", "（默认值）") if is_default else ""))
         with ragas_col3:
             is_default = "context_precision" not in ragas_metrics
             metric_label = "Context Precision" + (" ⚠️" if is_default else "")
             st.metric(metric_label, f"{context_precision:.4f}")
             st.progress(_safe_progress(context_precision))
-            st.caption("上下文精确度" + (" (默认值)" if is_default else ""))
+            st.caption(t("Context precision", "上下文精确度") + (t(" (default)", "（默认值）") if is_default else ""))
         with ragas_col4:
             is_default = len(default_metrics_used) > 0
-            metric_label = "综合质量" + (" ⚠️" if is_default else "")
+            metric_label = "Overall quality" + (" ⚠️" if is_default else "")
             st.metric(metric_label, f"{quality_score:.4f}")
             st.progress(_safe_progress(quality_score))
-            st.caption("平均分数" + (" (含默认值)" if is_default else ""))
+            st.caption(t("Average score", "平均分数") + (t(" (includes defaults)", "（含默认值）") if is_default else ""))
         
         
         # 显示回答内容
-        st.markdown("### 💬 生成的回答")
+        st.markdown("### 💬 Generated Answer")
         st.markdown(answer)
         
         # 显示检索到的文档块详情
         if retrieved_chunks:
-            st.markdown(f"### 📚 检索结果详情 ({num_chunks} 个文档块)")
-            with st.expander("查看检索到的文档块", expanded=False):
+            st.markdown(f"### 📚 Retrieval Result Details ({num_chunks} chunks)")
+            with st.expander(t("View retrieved chunks", "查看检索到的文档块"), expanded=False):
                 for idx, chunk in enumerate(retrieved_chunks[:10], 1):  # Show top 10
                     chunk_text = chunk.text if hasattr(chunk, "text") else str(chunk)
                     chunk_score = chunk.score if hasattr(chunk, "score") else None
                     chunk_id = chunk.chunk_id if hasattr(chunk, "chunk_id") else f"chunk_{idx}"
                     
-                    st.markdown(f"**文档块 {idx}** (ID: {chunk_id})")
+                    st.markdown(f"**Chunk {idx}** (ID: {chunk_id})")
                     if chunk_score is not None:
-                        st.caption(f"相关性分数: {chunk_score:.4f}")
+                        st.caption(f"Relevance score: {chunk_score:.4f}")
                     st.text(chunk_text[:300] + "..." if len(chunk_text) > 300 else chunk_text)
                     st.divider()
     
     except Exception as e:
         logger.exception("Playground query execution failed")
-        st.error(f"执行失败: {e}")
+        st.error(f"Execution failed: {e}")
 
 
 def _evaluate_playground_answer(
@@ -859,11 +862,11 @@ def _evaluate_playground_answer(
         evaluator = RagasEvaluator(settings=settings)
         
         if not retrieved_chunks:
-            st.warning("未找到检索到的文档块，无法进行质量评测。")
+            st.warning(t("No retrieved chunks were found, so quality evaluation cannot be performed.", "未找到检索到的文档块，无法进行质量评测。"))
             return
         
         # Evaluate
-        with st.spinner("运行 Ragas 评测中..."):
+        with st.spinner("Running Ragas evaluation..."):
             metrics = evaluator.evaluate(
                 query=query,
                 retrieved_chunks=retrieved_chunks,
@@ -871,7 +874,7 @@ def _evaluate_playground_answer(
             )
         
         # Display metrics
-        st.markdown("#### 📏 Ragas 评分")
+        st.markdown("#### 📏 Ragas Scores")
         cols = st.columns(3)
         
         faithfulness = metrics.get("faithfulness", 0.5)
@@ -879,15 +882,15 @@ def _evaluate_playground_answer(
         context_precision = metrics.get("context_precision", 0.5)
         
         with cols[0]:
-            st.metric("Faithfulness", f"{faithfulness:.4f}")
+            st.metric(t("Faithfulness", "忠实度"), f"{faithfulness:.4f}")
         with cols[1]:
-            st.metric("Answer Relevancy", f"{answer_relevancy:.4f}")
+            st.metric(t("Answer Relevancy", "答案相关性"), f"{answer_relevancy:.4f}")
         with cols[2]:
-            st.metric("Context Precision", f"{context_precision:.4f}")
+            st.metric(t("Context Precision", "上下文精确度"), f"{context_precision:.4f}")
     
     except Exception as e:
         logger.exception("Ragas evaluation failed")
-        st.error(f"质量评测失败: {e}")
+        st.error(f"Quality evaluation failed: {e}")
 
 
 def _create_arena_scoring_engine() -> ScoringEngine:
@@ -901,10 +904,10 @@ def _create_arena_scoring_engine() -> ScoringEngine:
 
 def _render_exhaustive_benchmark() -> None:
     """Render Module B: Exhaustive Benchmark."""
-    st.subheader("📊 Exhaustive Benchmark (批量压测与排行榜)")
+    st.subheader(t("📊 Exhaustive Benchmark", "📊 穷举压测"))
     
     # Add tab for history view
-    view_tab1, view_tab2 = st.tabs(["▶️ 运行压测", "📈 历史结果"])
+    view_tab1, view_tab2 = st.tabs(["▶️ Run Benchmark", "📈 History"])
     
     with view_tab1:
         _render_benchmark_run()
@@ -916,18 +919,19 @@ def _render_exhaustive_benchmark() -> None:
 def _render_benchmark_run() -> None:
     """Render the benchmark run interface."""
     st.markdown(
-        "跑完测试集，采用两两匹配穷举法找出最优组合。\n\n"
-        "**工作原理**：系统会自动生成所有模型的两两组合，并根据测试集中的 `expected_complexity` 标签自动路由：\n"
-        "- 简单询问（simple）→ 使用本地小模型\n"
-        "- 复杂询问（complex）→ 使用 API 大模型\n\n"
-        "您只需要点击开始，系统会自动运行所有组合并实时更新排行榜。"
+        "Run the full test set and exhaustively evaluate all pairwise combinations to find the best setup.\n\n"
+        "**How it works**: the system automatically generates all model pairs and routes each case using the "
+        "`expected_complexity` label from the test set:\n"
+        "- Simple queries (`simple`) -> local small model\n"
+        "- Complex queries (`complex`) -> API large model\n\n"
+        "Click start and the system will run every combination and update the leaderboard in real time."
     )
 
     pending_save = st.session_state.get(PENDING_BENCHMARK_SAVE_KEY)
     if isinstance(pending_save, dict):
-        st.info("已生成本次 leaderboard，可选择是否保存此次结果到历史。")
+        st.info(t("A leaderboard has been generated for this run. You can choose whether to save it to history.", "本次 leaderboard 已生成，你可以选择是否保存到历史记录。"))
         ps1, ps2 = st.columns(2)
-        if ps1.button("💾 保存此次结果", key="arena_save_latest_result"):
+        if ps1.button("💾 Save This Result", key="arena_save_latest_result"):
             _save_benchmark_history(
                 strategy_results=pending_save["strategy_results"],
                 test_cases=pending_save["test_cases"],
@@ -939,16 +943,16 @@ def _render_benchmark_run() -> None:
                 run_note=pending_save.get("run_note"),
             )
             st.session_state.pop(PENDING_BENCHMARK_SAVE_KEY, None)
-            st.success("本次结果已保存到历史记录。")
-        if ps2.button("🗑️ 丢弃此次结果", key="arena_discard_latest_result"):
+            st.success(t("This result has been saved to history.", "本次结果已保存到历史记录。"))
+        if ps2.button("🗑️ Discard This Result", key="arena_discard_latest_result"):
             st.session_state.pop(PENDING_BENCHMARK_SAVE_KEY, None)
-            st.warning("已丢弃当前未保存结果。")
+            st.warning(t("The current unsaved result has been discarded.", "当前未保存结果已被丢弃。"))
     
     # Test set file uploader (compact)
     col1, col2 = st.columns([3, 1])
     with col1:
         test_set_path = st.text_input(
-            "测试集路径",
+            "Test set path",
             value=str(DEFAULT_GOLDEN_SET),
             key="benchmark_test_set_path",
             label_visibility="visible",
@@ -956,7 +960,7 @@ def _render_benchmark_run() -> None:
     
     test_set_file = Path(test_set_path)
     if not test_set_file.exists():
-        st.warning(f"⚠️ 测试集文件不存在: {test_set_path}")
+        st.warning(f"⚠️ Test set file does not exist: {test_set_path}")
         return
     
     # Load test set
@@ -970,9 +974,9 @@ def _render_benchmark_run() -> None:
         complex_count = sum(1 for tc in test_cases if tc.get("expected_complexity", "").lower() == "complex")
         
         with col2:
-            st.caption(f"📊 {len(test_cases)} 用例 ({simple_count}简/{complex_count}复)")
+            st.caption(f"📊 {len(test_cases)} cases ({simple_count} simple / {complex_count} complex)")
     except Exception as e:
-        st.error(f"加载测试集失败: {e}")
+        st.error(f"Failed to load test set: {e}")
         return
     
     # Show available models info
@@ -981,11 +985,11 @@ def _render_benchmark_run() -> None:
     tier3_models = _get_tier3_models()
     
     if not tier2_models or not tier3_models:
-        st.warning("⚠️ 需要至少一个本地小模型和一个 API 大模型才能运行双模型组合策略。")
+        st.warning(t("⚠️ At least one local small model and one API large model are required for the dual-model hybrid strategy.", "⚠️ 运行双模型混合策略至少需要一个本地小模型和一个 API 大模型。"))
         if not tier2_models:
-            st.info("💡 提示：请确保已注册本地小模型（Tier 2）。")
+            st.info(t("💡 Tip: make sure at least one local small model (Tier 2) is registered.", "💡 提示：请确保至少注册了一个本地小模型（Tier 2）。"))
         if not tier3_models:
-            st.info("💡 提示：请确保已注册 API 大模型（Tier 3）。")
+            st.info(t("💡 Tip: make sure at least one API large model (Tier 3) is registered.", "💡 提示：请确保至少注册了一个 API 大模型（Tier 3）。"))
         return
     
     # Get benchmark model ID
@@ -1008,17 +1012,17 @@ def _render_benchmark_run() -> None:
     total_tasks = total_combinations * len(test_cases)
     
     # Compact display of test combinations
-    st.caption(f"📋 将测试 {total_combinations} 个组合（基准: {single_count}, 双模型: {hybrid_count}），共 {total_tasks} 个任务")
+    st.caption(f"📋 Testing {total_combinations} combinations (benchmark: {single_count}, hybrid: {hybrid_count}), for {total_tasks} total tasks")
     
     # Show preview of combinations
-    with st.expander("查看所有组合详情", expanded=False):
-        st.markdown("**单模型策略（基准对比）：**")
+    with st.expander(t("View all combination details", "查看所有组合详情"), expanded=False):
+        st.markdown("**Single-model strategy (benchmark baseline):**")
         if benchmark_model:
             st.text(f"  • {benchmark_model.display_name} [Benchmark]")
         else:
-            st.text("  • 未找到基准模型")
+            st.text("  • Benchmark model not found")
         
-        st.markdown("**双模型组合策略：**")
+        st.markdown("**Dual-model hybrid strategies:**")
         for small in tier2_models:
             for large in tier3_models:
                 small_name = small.display_name
@@ -1030,23 +1034,23 @@ def _render_benchmark_run() -> None:
                 st.text(f"  • {small_name} + {large_name}")
     
     # Performance optimization option
-    st.markdown("#### ⚡ 性能优化")
+    st.markdown("#### ⚡ Performance Optimization")
     fast_mode = st.checkbox(
-        "🚀 加速模式",
+        "🚀 Fast mode",
         value=False,
         key="benchmark_fast_mode",
         help=(
-            "启用加速模式可以显著提升评估速度（节省 60-70% 时间）：\n"
-            "- 减少上下文数量（5→3 chunks）\n"
-            "- 截断答案长度（800 字符）\n"
-            "- 只评估 faithfulness 指标\n"
-            "- 优化超时和重试设置\n"
-            "注意：可能会略微影响评估质量"
+            "Fast mode can significantly speed up evaluation (saving about 60-70% time):\n"
+            "- Reduce context count (5 -> 3 chunks)\n"
+            "- Truncate answer length (800 characters)\n"
+            "- Evaluate only the faithfulness metric\n"
+            "- Optimize timeout and retry settings\n"
+            "Note: this may slightly reduce evaluation quality"
         ),
     )
     
     if fast_mode:
-        st.info("⚡ 加速模式已启用：将使用性能优化设置，评估速度提升 60-70%")
+        st.info(t("⚡ Fast mode is enabled: performance-optimized settings will be used, improving evaluation speed by about 60-70%.", "⚡ 已启用加速模式：将使用性能优化设置，评估速度预计提升约 60-70%。"))
     
     # Check for saved progress
     saved_progress = _load_benchmark_progress()
@@ -1077,51 +1081,51 @@ def _render_benchmark_run() -> None:
             # Title with help icon (using expander)
             col_title, col_help = st.columns([20, 1])
             with col_title:
-                st.markdown("#### 📊 已保存的进度")
+                st.markdown("#### 📊 Saved Progress")
             with col_help:
                 with st.expander("ⓘ", expanded=False):
                     st.markdown(
-                        "✅ **自动保存功能已启用**\n\n"
-                        f"进度会自动保存到: `{BENCHMARK_PROGRESS_FILE}`\n\n"
-                        "**重要提示**：\n"
-                        "- ✅ 刷新网页**不会**清除进度（进度保存在文件中）\n"
-                        "- ✅ 关闭浏览器**不会**清除进度\n"
-                        "- ✅ 每次测试用例完成后都会自动保存\n"
-                        "- ✅ 可以随时中断，稍后继续\n"
-                        "- ⚠️ 只有点击「清除进度」按钮才会删除保存的进度"
+                        "✅ **Auto-save is enabled**\n\n"
+                        f"Progress is automatically saved to: `{BENCHMARK_PROGRESS_FILE}`\n\n"
+                        "**Important notes**:\n"
+                        "- ✅ Refreshing the page will **not** clear progress\n"
+                        "- ✅ Closing the browser will **not** clear progress\n"
+                        "- ✅ Progress is saved automatically after each completed test case\n"
+                        "- ✅ You can stop at any time and continue later\n"
+                        "- ⚠️ Progress is deleted only when you click the clear button"
                     )
             
             if is_completed:
                 # Test is completed, only show completion message and clear button
                 # Results will be shown in "历史结果" tab
                 st.success(
-                    f"✅ **测试已完成**（完成时间: {saved_time_str}）\n\n"
-                    f"📈 **完成情况**：\n"
-                    f"- 已完成策略: {completed_count}/{total_count}\n"
-                    f"- 已完成查询: {total_queries_completed}/{total_queries_expected}\n"
-                    f"- 测试集: `{Path(saved_test_set).name}`\n\n"
-                    f"💡 **提示**：可在此处点击「保存此次结果」，或切换到「📈 历史结果」查看历史。"
+                    f"✅ **Benchmark completed** (completed at: {saved_time_str})\n\n"
+                    f"📈 **Completion summary**:\n"
+                    f"- Completed strategies: {completed_count}/{total_count}\n"
+                    f"- Completed queries: {total_queries_completed}/{total_queries_expected}\n"
+                    f"- Test set: `{Path(saved_test_set).name}`\n\n"
+                    f"💡 **Tip**: You can click `Save This Result` here, or switch to `History` to review past runs."
                 )
 
                 sv1, sv2 = st.columns(2)
-                if sv1.button("💾 保存此次结果", key="arena_save_completed_progress"):
+                if sv1.button("💾 Save This Result", key="arena_save_completed_progress"):
                     _save_completed_progress_to_history(saved_progress)
-                    st.success("已将当前完成结果保存到历史。")
+                    st.success(t("The completed result has been saved to history.", "当前完成结果已保存到历史记录。"))
                 
                 # Clear progress button
-                if sv2.button("🗑️ 清除进度并开始新的测试", key="benchmark_clear_completed"):
+                if sv2.button("🗑️ Clear Progress and Start a New Run", key="benchmark_clear_completed"):
                     _clear_benchmark_progress()
-                    st.success("✅ 进度已清除")
+                    st.success(t("✅ Progress cleared", "✅ 进度已清除"))
                     st.rerun()
             else:
                 # Test is not completed, show resume option
                 st.info(
-                    f"**发现未完成的进度**（保存时间: {saved_time_str}）\n\n"
-                    f"📈 **完成情况**：\n"
-                    f"- 已完成策略: {completed_count}/{total_count}\n"
-                    f"- 已完成查询: {total_queries_completed}/{total_queries_expected}\n"
-                    f"- 测试集: `{Path(saved_test_set).name}`\n\n"
-                    f"💡 **提示**：点击「继续压测」将从上次中断的地方继续，不会重复已完成的测试。"
+                    f"**Unfinished progress was found** (saved at: {saved_time_str})\n\n"
+                    f"📈 **Completion summary**:\n"
+                    f"- Completed strategies: {completed_count}/{total_count}\n"
+                    f"- Completed queries: {total_queries_completed}/{total_queries_expected}\n"
+                    f"- Test set: `{Path(saved_test_set).name}`\n\n"
+                    f"💡 **Tip**: Click `Resume Benchmark` to continue from where the last run stopped without repeating completed tests."
                 )
                 
                 # Buttons in columns, but execute outside column context
@@ -1130,14 +1134,14 @@ def _render_benchmark_run() -> None:
                 clear_clicked = False
                 
                 with col1:
-                    resume_clicked = st.button("▶️ 继续压测", type="primary", key="benchmark_resume")
+                    resume_clicked = st.button(t("▶️ Resume Benchmark", "▶️ 继续压测"), type="primary", key="benchmark_resume")
                 with col2:
-                    clear_clicked = st.button("🗑️ 清除进度并重新开始", key="benchmark_clear")
+                    clear_clicked = st.button(t("🗑️ Clear Progress and Restart", "🗑️ 清除进度并重新开始"), key="benchmark_clear")
                 
                 # Handle button clicks outside column context to ensure full-width layout
                 if clear_clicked:
                     _clear_benchmark_progress()
-                    st.success("✅ 进度已清除")
+                    st.success(t("✅ Progress cleared", "✅ 进度已清除"))
                     st.rerun()
                 
                 if resume_clicked:
@@ -1156,37 +1160,37 @@ def _render_benchmark_run() -> None:
                     )
         else:
             st.warning(
-                f"⚠️ **已保存的进度来自不同的测试集**：\n\n"
-                f"- 已保存: `{Path(saved_test_set).name}`\n"
-                f"- 当前: `{Path(current_test_set).name}`\n\n"
-                f"💡 **提示**：如需继续之前的进度，请选择对应的测试集文件。"
+                f"⚠️ **Saved progress belongs to a different test set**:\n\n"
+                f"- Saved: `{Path(saved_test_set).name}`\n"
+                f"- Current: `{Path(current_test_set).name}`\n\n"
+                f"💡 **Tip**: Select the matching test set file if you want to continue the previous run."
             )
-            if st.button("🗑️ 清除旧进度", key="benchmark_clear_old"):
+            if st.button(t("🗑️ Clear Old Progress", "🗑️ 清除旧进度"), key="benchmark_clear_old"):
                 _clear_benchmark_progress()
-                st.success("✅ 旧进度已清除")
+                st.success(t("✅ Old progress cleared", "✅ 旧进度已清除"))
                 st.rerun()
     else:
         # Show title with help icon even when no progress exists
         col_title, col_help = st.columns([20, 1])
         with col_title:
-            st.markdown("#### 📊 已保存的进度")
+            st.markdown("#### 📊 Saved Progress")
         with col_help:
             with st.expander("ⓘ", expanded=False):
                 st.markdown(
-                    "✅ **自动保存功能已启用**\n\n"
-                    f"进度会自动保存到: `{BENCHMARK_PROGRESS_FILE}`\n\n"
-                    "**重要提示**：\n"
-                    "- ✅ 刷新网页**不会**清除进度（进度保存在文件中）\n"
-                    "- ✅ 关闭浏览器**不会**清除进度\n"
-                    "- ✅ 每次测试用例完成后都会自动保存\n"
-                    "- ✅ 可以随时中断，稍后继续\n"
-                    "- ⚠️ 只有点击「清除进度」按钮才会删除保存的进度"
+                    "✅ **Auto-save is enabled**\n\n"
+                    f"Progress is automatically saved to: `{BENCHMARK_PROGRESS_FILE}`\n\n"
+                    "**Important notes**:\n"
+                    "- ✅ Refreshing the page will **not** clear progress\n"
+                    "- ✅ Closing the browser will **not** clear progress\n"
+                    "- ✅ Progress is saved automatically after each completed test case\n"
+                    "- ✅ You can stop at any time and continue later\n"
+                    "- ⚠️ Progress is deleted only when you click the clear button"
                 )
-        st.info("ℹ️ 当前没有保存的进度。开始压测后，进度会自动保存。")
+        st.info(t("ℹ️ No saved progress is available yet. Progress will be auto-saved after the benchmark starts.", "ℹ️ 当前没有已保存进度。开始压测后会自动保存进度。"))
     
     # Run benchmark button (only show if no resume available)
     if not resume_available:
-        st.markdown("#### 🚀 开始测试")
+        st.markdown("#### 🚀 Start Benchmark")
         
         # Name and note inputs
         col1, col2 = st.columns([1, 1])
@@ -1194,21 +1198,21 @@ def _render_benchmark_run() -> None:
             # Default name is current timestamp
             default_name = time.strftime("%Y-%m-%d %H:%M:%S")
             run_name = st.text_input(
-                "运行名称",
+                "Run name",
                 value=default_name,
                 key="benchmark_run_name",
-                help="本次测试运行的名称，默认使用当前时间"
+                help="Name for this benchmark run. The current time is used by default."
             )
         with col2:
             run_note = st.text_area(
-                "更新备注",
+                "Run notes",
                 value="",
                 key="benchmark_run_note",
                 height=60,
-                help="记录本次测试的更新要点或改动说明"
+                help="Optional notes about changes, experiments, or context for this run"
             )
         
-        if st.button("▶️ 开始压测", type="primary", key="benchmark_run"):
+        if st.button(t("▶️ Start Benchmark", "▶️ 开始压测"), type="primary", key="benchmark_run"):
             # Store name and note in session state for later use
             st.session_state["benchmark_run_name"] = run_name
             st.session_state["benchmark_run_note"] = run_note
@@ -1287,7 +1291,7 @@ def _run_benchmark(
                 all_strategies.append((strategy_name, small.display_name, large.display_name))
         
         if not all_strategies:
-            st.warning("没有可用的模型组合。")
+            st.warning(t("No model combinations are available.", "没有可用的模型组合。"))
             return
         
         # Load saved progress if resuming
@@ -1306,8 +1310,8 @@ def _run_benchmark(
             
             completed_count = len(completed_strategy_names)
             st.success(
-                f"✅ 已恢复进度：{completed_count}/{len(all_strategies)} 个策略已完成，"
-                f"将从中断处继续..."
+                f"✅ Progress restored: {completed_count}/{len(all_strategies)} strategies are already complete, "
+                f"and the run will continue from the interruption point..."
             )
         
         # Ensure full-width layout from here - all subsequent content should be full-width
@@ -1370,7 +1374,7 @@ def _run_benchmark(
                         used_model = small_model
                     else:
                         used_model = large_model
-                    model_info = f"{small_model} + {large_model} → 使用: {used_model}"
+                    model_info = f"{small_model} + {large_model} -> using: {used_model}"
                 else:
                     # Single model strategy
                     used_model = large_model
@@ -1378,17 +1382,17 @@ def _run_benchmark(
                 
                 # Update status with detailed information
                 status_text.markdown(
-                    f"**当前进度**: {current_task}/{total_tasks} "
+                    f"**Current progress**: {current_task}/{total_tasks} "
                     f"({progress*100:.1f}%)\n\n"
-                    f"**当前组合**: {strategy_name}\n"
-                    f"**模型选择**: {model_info}\n"
-                    f"**当前问题**: {query_id} ({expected_complexity})"
+                    f"**Current combination**: {strategy_name}\n"
+                    f"**Model selection**: {model_info}\n"
+                    f"**Current query**: {query_id} ({expected_complexity})"
                 )
                 
                 # Execute query with error handling
                 try:
                     # Update stage: Answer Generation
-                    stage_text.info("🔄 **阶段**: 回答生成中...")
+                    stage_text.info("🔄 **Stage**: Generating answer...")
                     
                     result = _execute_benchmark_query(
                         query=query,
@@ -1400,7 +1404,7 @@ def _run_benchmark(
                         ragas_evaluator=ragas_evaluator,
                         settings=settings,
                         expected_complexity=expected_complexity,
-                        status_callback=lambda stage: stage_text.info(f"🔄 **阶段**: {stage}"),
+                        status_callback=lambda stage: stage_text.info(f"🔄 **Stage**: {stage}"),
                     )
                     # Add query_id to result for matching during resume
                     result["query_id"] = query_id
@@ -1490,28 +1494,28 @@ def _run_benchmark(
                     # Display summary in columns (these are properly scoped)
                     summary_col1, summary_col2, summary_col3 = st.columns(3)
                     with summary_col1:
-                        st.metric("已完成策略", f"{completed_count}/{len(all_strategies)}")
+                        st.metric(t("Completed strategies", "已完成策略"), f"{completed_count}/{len(all_strategies)}")
                     with summary_col2:
-                        st.metric("成功查询", f"{successful_queries}/{total_queries}")
+                        st.metric(t("Successful queries", "成功查询"), f"{successful_queries}/{total_queries}")
                     with summary_col3:
                         success_rate = (successful_queries / total_queries * 100) if total_queries > 0 else 0
-                        st.metric("成功率", f"{success_rate:.1f}%")
+                        st.metric(t("Success rate", "成功率"), f"{success_rate:.1f}%")
                     
                     # Columns are closed here, leaderboard will be full-width
                     if completed_metrics:
                         _display_leaderboard(completed_metrics, scoring_engine)
                     else:
-                        st.info("⏳ 等待更多测试结果...")
+                        st.info(t("⏳ Waiting for more benchmark results...", "⏳ 正在等待更多压测结果..."))
             except Exception as e:
                 logger.error(f"Failed to update leaderboard: {e}", exc_info=True)
                 # Show error but continue
                 leaderboard_placeholder.empty()
                 with leaderboard_placeholder.container():
-                    st.warning(f"⚠️ 更新排行榜时出错: {e}")
+                    st.warning(f"⚠️ Failed to update leaderboard: {e}")
                 # Continue anyway, will update at the end
         
         progress_bar.progress(1.0)
-        status_text.markdown("✅ **压测完成！**")
+        status_text.markdown("✅ **Benchmark complete!**")
         stage_text.empty()
         
         # Final leaderboard update (should be same as last update, but ensure it's displayed)
@@ -1532,14 +1536,14 @@ def _run_benchmark(
             # Clear placeholder and render full-width final leaderboard
             leaderboard_placeholder.empty()
             with leaderboard_placeholder.container():
-                st.caption(f"📊 已完成 {len(all_strategies)}/{len(all_strategies)} 个策略的测试")
+                st.caption(f"📊 Finished testing {len(all_strategies)}/{len(all_strategies)} strategies")
                 if final_metrics:
                     _display_leaderboard(final_metrics, scoring_engine)
                 else:
-                    st.warning("⚠️ 没有可显示的评估结果。请检查日志以了解详情。")
+                    st.warning(t("⚠️ No evaluation results are available to display. Check the logs for details.", "⚠️ 当前没有可显示的评估结果，请检查日志。"))
         except Exception as e:
             logger.error(f"Failed to display final leaderboard: {e}", exc_info=True)
-            st.error(f"显示最终排行榜失败: {e}")
+            st.error(f"Failed to display the final leaderboard: {e}")
         
         # Save final progress
         _save_benchmark_progress(
@@ -1563,11 +1567,11 @@ def _run_benchmark(
         }
         
         # Optionally clear progress after completion (user can choose to keep it)
-        st.info("💾 进度已保存。若需写入历史，请点击「保存此次结果」。")
+        st.info(t("💾 Progress has been saved. Click `Save This Result` if you want to write it into history.", "💾 进度已保存。如需写入历史记录，请点击“保存此次结果”。"))
     
     except Exception as e:
         logger.exception("Benchmark execution failed")
-        st.error(f"压测失败: {e}")
+        st.error(f"Benchmark failed: {e}")
 
 
 def _execute_benchmark_query(
@@ -1656,7 +1660,7 @@ def _execute_benchmark_query(
         ) as metrics:
             # Update stage: Answer Generation
             if status_callback:
-                status_callback("回答生成中...")
+                status_callback("Generating answer...")
             
             # Execute complete RAG pipeline
             start_time = time.monotonic()
@@ -1675,7 +1679,7 @@ def _execute_benchmark_query(
                 # Validate answer was generated
                 if not answer or not answer.strip():
                     logger.warning(f"Empty answer generated for query: {query[:50]}...")
-                    answer = "抱歉，未能生成有效回答。"
+                    answer = "Sorry, no valid answer could be generated."
                 
                 # Validate retrieved chunks
                 if not retrieved_chunks:
@@ -1686,7 +1690,7 @@ def _execute_benchmark_query(
                 # Don't raise - return error result instead to allow benchmark to continue
                 result["error"] = f"RAG pipeline failed: {str(rag_exc)[:200]}"
                 result["success"] = False
-                result["answer"] = "抱歉，RAG 管道执行失败。"
+                result["answer"] = "Sorry, the RAG pipeline failed to execute."
                 result["retrieved_chunks"] = []
                 result["latency_s"] = elapsed
                 result["eval_time_s"] = 0.0
@@ -1721,7 +1725,7 @@ def _execute_benchmark_query(
         try:
             # Update stage: RAGAS Evaluation
             if status_callback:
-                status_callback("RAGAS 评估中...")
+                status_callback("Running RAGAS evaluation...")
             
             # Check if we have valid retrieved chunks
             if not retrieved_chunks:
@@ -1997,40 +2001,40 @@ def _display_leaderboard(
     All content is rendered in full-width layout.
     """
     # Ensure full-width layout
-    st.markdown("### 🏆 Leaderboard (排行榜) - 实时更新")
+    st.markdown("### 🏆 Leaderboard - Live Updates")
     
     if not all_metrics:
-        st.info("⏳ 等待测试结果...")
+        st.info(t("⏳ Waiting for benchmark results...", "⏳ 正在等待压测结果..."))
         return
     
     # Display scoring rules and calculation process
-    with st.expander("📊 评分规则说明", expanded=False):
+    with st.expander(t("📊 Scoring Rules", "📊 评分规则说明"), expanded=False):
         st.markdown("""
-        #### 传统综合评分（Min-Max 归一化）
+        #### Traditional Composite Score (Min-Max Normalization)
 
-        - 对成本/延迟/质量分别做 Min-Max 归一化
-        - 成本、延迟是逆向指标（越低越好）
-        - 质量是正向指标（越高越好）
-        - 综合评分 = 加权和（0~100）
+        - Cost, latency, and quality are normalized independently with Min-Max scaling
+        - Cost and latency are inverse metrics (lower is better)
+        - Quality is a positive metric (higher is better)
+        - Composite score = weighted sum (0-100)
         """)
         
         # Show current weights
         st.markdown(f"""
-        **当前权重配置：**
-        - 成本权重：{scoring_engine.cost_weight * 100:.1f}%
-        - 延迟权重：{scoring_engine.latency_weight * 100:.1f}%
-        - 质量权重：{scoring_engine.quality_weight * 100:.1f}%
+        **Current weight configuration:**
+        - Cost weight: {scoring_engine.cost_weight * 100:.1f}%
+        - Latency weight: {scoring_engine.latency_weight * 100:.1f}%
+        - Quality weight: {scoring_engine.quality_weight * 100:.1f}%
         """)
     
     # Model difference explanation
-    with st.expander("ℹ️ 模型说明", expanded=False):
+    with st.expander(t("ℹ️ Model Notes", "ℹ️ 模型说明"), expanded=False):
         st.markdown("""
-        **api-gpt-4o-mini vs Openai gpt-4o-mini [Benchmark] 的区别：**
+        **Difference between `api-gpt-4o-mini` and `Openai gpt-4o-mini [Benchmark]`:**
         
-        - **api-gpt-4o-mini**：通过 智增增代理 (https://api.zhizengzeng.com/v1) 访问的 OpenAI GPT-4o-mini
-        - **Openai gpt-4o-mini [Benchmark]**：从 settings.yaml 配置的基准模型（可能是直接访问 OpenAI API 或 Azure OpenAI）
+        - **api-gpt-4o-mini**: accesses OpenAI GPT-4o-mini through the Zhizengzeng proxy (`https://api.zhizengzeng.com/v1`)
+        - **Openai gpt-4o-mini [Benchmark]**: the benchmark model configured in `settings.yaml` (possibly direct OpenAI or Azure OpenAI)
         
-        两者使用相同的模型（GPT-4o-mini），但通过不同的 API 端点访问，可能因网络路径、代理延迟等因素导致性能差异。
+        Both use the same underlying model (`GPT-4o-mini`), but different API endpoints may create performance differences because of network path and proxy latency.
         """)
     
     # Get benchmark model ID
@@ -2046,19 +2050,16 @@ def _display_leaderboard(
     # Build dataframe
     import pandas as pd
     
-    # Helper function to convert rank number to Chinese
-    def get_chinese_rank(rank: int) -> str:
-        """Convert rank number to Chinese (第一名, 第二名, etc.)"""
-        chinese_numbers = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
-        if rank <= 10:
-            return f"第{chinese_numbers[rank]}名"
-        elif rank <= 20:
-            if rank == 10:
-                return "第十名"
-            else:
-                return f"第十{chinese_numbers[rank - 10]}名"
-        else:
-            return f"第{rank}名"
+    def get_rank_label(rank: int) -> str:
+        """Convert rank number to a compact English label."""
+        suffix = "th"
+        if rank % 10 == 1 and rank % 100 != 11:
+            suffix = "st"
+        elif rank % 10 == 2 and rank % 100 != 12:
+            suffix = "nd"
+        elif rank % 10 == 3 and rank % 100 != 13:
+            suffix = "rd"
+        return f"{rank}{suffix}"
     
     rows = []
     benchmark_flags = []
@@ -2084,28 +2085,28 @@ def _display_leaderboard(
             composite_score = 50.0
         
         row = {
-            "排名": get_chinese_rank(rank),
-            "策略名称": strategy_name,
-            "综合评分": f"{composite_score:.2f}",
-            "成功率 (%)": f"{metrics.success_rate * 100:.2f}",
-            "平均生成时长 (s)": f"{metrics.avg_latency_s:.3f}",
-            "平均测评时长 (s)": f"{metrics.avg_eval_time_s:.3f}",
-            "P95 延迟 (s)": f"{metrics.p95_latency_s:.3f}",
-            "平均 Token/Query": f"{metrics.avg_tokens_per_query:.0f}",
-            "单次平均成本 ($)": f"{metrics.avg_cost_per_query:.6f}",
-            "总压测成本 ($)": f"{metrics.total_cost:.6f}",
-            "平均质量得分": f"{metrics.avg_quality_score * 100:.2f}",
-            "Faithfulness (忠实度)": (
+            "Rank": get_rank_label(rank),
+            "Strategy": strategy_name,
+            "Composite Score": f"{composite_score:.2f}",
+            "Success Rate (%)": f"{metrics.success_rate * 100:.2f}",
+            "Avg Generation Time (s)": f"{metrics.avg_latency_s:.3f}",
+            "Avg Evaluation Time (s)": f"{metrics.avg_eval_time_s:.3f}",
+            "P95 Latency (s)": f"{metrics.p95_latency_s:.3f}",
+            "Avg Tokens / Query": f"{metrics.avg_tokens_per_query:.0f}",
+            "Avg Cost / Query ($)": f"{metrics.avg_cost_per_query:.6f}",
+            "Total Benchmark Cost ($)": f"{metrics.total_cost:.6f}",
+            "Avg Quality Score": f"{metrics.avg_quality_score * 100:.2f}",
+            "Faithfulness": (
                 f"{metrics.avg_faithfulness * 100:.2f}"
                 if metrics.avg_faithfulness is not None
                 else "N/A"
             ),
-            "Answer Relevancy (答案相关性)": (
+            "Answer Relevancy": (
                 f"{metrics.avg_answer_relevancy * 100:.2f}"
                 if metrics.avg_answer_relevancy is not None
                 else "N/A"
             ),
-            "Context Precision (上下文精确度)": (
+            "Context Precision": (
                 f"{metrics.avg_context_precision * 100:.2f}"
                 if metrics.avg_context_precision is not None
                 else "N/A"
@@ -2141,7 +2142,7 @@ def _display_leaderboard(
         
         if benchmark_strategy and first_place.strategy_name != benchmark_strategy.strategy_name:
             st.markdown("---")
-            st.markdown("### 🎯 第一名 vs Benchmark 对比")
+            st.markdown("### 🎯 Top Strategy vs Benchmark")
             
             # Calculate improvements
             def calculate_improvement(new_val: float, old_val: float, higher_is_better: bool = True) -> tuple:
@@ -2151,10 +2152,10 @@ def _display_leaderboard(
                 
                 if higher_is_better:
                     improvement = ((new_val - old_val) / old_val) * 100
-                    direction = "提升" if improvement > 0 else "下降"
+                    direction = "improved" if improvement > 0 else "declined"
                 else:
                     improvement = ((old_val - new_val) / old_val) * 100
-                    direction = "提升" if improvement > 0 else "下降"
+                    direction = "improved" if improvement > 0 else "declined"
                 
                 return (improvement, direction)
             
@@ -2192,7 +2193,7 @@ def _display_leaderboard(
             with col1:
                 comp_delta = f"{comp_improvement:+.2f}%" if comp_improvement != float('inf') else "N/A"
                 st.metric(
-                    "综合评分",
+                    "Composite Score",
                     f"{first_place.composite_score:.2f}",
                     delta=comp_delta,
                     delta_color="normal" if comp_improvement > 0 else "inverse",
@@ -2202,7 +2203,7 @@ def _display_leaderboard(
             with col2:
                 cost_delta = f"{cost_improvement:+.2f}%" if cost_improvement != float('inf') else "N/A"
                 st.metric(
-                    "平均成本",
+                    "Average Cost",
                     f"${first_place.avg_cost_per_query:.6f}",
                     delta=cost_delta,
                     delta_color="normal" if cost_improvement > 0 else "inverse",
@@ -2212,7 +2213,7 @@ def _display_leaderboard(
             with col3:
                 latency_delta = f"{latency_improvement:+.2f}%" if latency_improvement != float('inf') else "N/A"
                 st.metric(
-                    "平均延迟",
+                    "Average Latency",
                     f"{first_place.avg_latency_s:.3f}s",
                     delta=latency_delta,
                     delta_color="normal" if latency_improvement > 0 else "inverse",
@@ -2222,7 +2223,7 @@ def _display_leaderboard(
             with col4:
                 quality_delta = f"{quality_improvement:+.2f}%" if quality_improvement != float('inf') else "N/A"
                 st.metric(
-                    "平均质量",
+                    "Average Quality",
                     f"{first_place.avg_quality_score * 100:.2f}%",
                     delta=quality_delta,
                     delta_color="normal" if quality_improvement > 0 else "inverse",
@@ -2230,19 +2231,19 @@ def _display_leaderboard(
                 )
             
             # Detailed comparison table
-            with st.expander("📊 详细对比表", expanded=False):
+            with st.expander(t("📊 Detailed Comparison Table", "📊 详细对比表"), expanded=False):
                 comparison_data = {
-                    "指标": [
-                        "综合评分",
-                        "平均成本 ($)",
-                        "平均延迟 (秒)",
-                        "P95 延迟 (秒)",
-                        "平均质量得分 (%)",
+                    "Metric": [
+                        "Composite Score",
+                        "Average Cost ($)",
+                        "Average Latency (s)",
+                        "P95 Latency (s)",
+                        "Average Quality Score (%)",
                         "Faithfulness (%)",
                         "Answer Relevancy (%)",
                         "Context Precision (%)",
-                        "平均Token数",
-                        "总成本 ($)",
+                        "Average Token Count",
+                        "Total Cost ($)",
                     ],
                     f"🥇 {first_place.strategy_name}": [
                         f"{first_place.composite_score:.2f}",
@@ -2268,7 +2269,7 @@ def _display_leaderboard(
                         f"{benchmark_strategy.avg_tokens_per_query:.0f}",
                         f"{benchmark_strategy.total_cost:.6f}",
                     ],
-                    "提升/下降": [
+                    "Improvement / Decline": [
                         f"{comp_improvement:+.2f}%" if comp_improvement != float('inf') else "N/A",
                         f"{cost_improvement:+.2f}%" if cost_improvement != float('inf') else "N/A",
                         f"{latency_improvement:+.2f}%" if latency_improvement != float('inf') else "N/A",
@@ -2285,13 +2286,13 @@ def _display_leaderboard(
                 comparison_df = pd.DataFrame(comparison_data)
                 st.dataframe(comparison_df, width='stretch', use_container_width=True)
                 
-                st.caption("💡 提示：提升百分比中，正数表示改进（成本/延迟降低或质量/评分提高），负数表示下降。")
+                st.caption(t("💡 Positive percentages indicate improvement, while negative percentages indicate a decline.", "💡 正数表示改进，负数表示下降。"))
     
     # Visualization section
-    st.markdown("#### 📊 可视化分析")
+    st.markdown("#### 📊 Visual Analysis")
     
     # Create visualization tabs
-    viz_tab1, viz_tab2, viz_tab3, viz_tab4, viz_tab5 = st.tabs(["综合评分对比", "成本分析", "延迟分析", "质量分析", "运行时间分析"])
+    viz_tab1, viz_tab2, viz_tab3, viz_tab4, viz_tab5 = st.tabs(["Composite Score", "Cost Analysis", "Latency Analysis", "Quality Analysis", "Runtime Analysis"])
     
     with viz_tab1:
         # Composite score comparison
@@ -2310,7 +2311,7 @@ def _display_leaderboard(
                 pass  # Fallback to default font if Chinese fonts not available
         except ImportError:
             matplotlib_available = False
-            st.warning("matplotlib 未安装，无法显示图表。请运行: pip install matplotlib")
+            st.warning(t("`matplotlib` is not installed, so charts cannot be displayed. Run: `pip install matplotlib`", "未安装 `matplotlib`，无法显示图表。请运行：`pip install matplotlib`"))
         
         if matplotlib_available:
             # Sort by composite score (descending - highest first)
@@ -2333,9 +2334,9 @@ def _display_leaderboard(
                 colors[0] = '#FFD700'  # Gold color for first place
             
             bars = ax.barh(strategy_names, composite_scores, color=colors)
-            ax.set_xlabel('综合评分', fontsize=12, fontweight='bold')
-            ax.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax.set_title('策略综合评分对比（评分越高越好）', fontsize=14, fontweight='bold', pad=20)
+            ax.set_xlabel('Composite Score', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax.set_title('Composite Score Comparison (higher is better)', fontsize=14, fontweight='bold', pad=20)
             ax.set_xlim(0, 100)
             ax.grid(axis='x', alpha=0.3)
             
@@ -2359,7 +2360,7 @@ def _display_leaderboard(
             plt.close(fig)
         else:
             # Fallback to simple text display
-            st.info("图表功能需要 matplotlib 库。请安装: pip install matplotlib")
+            st.info(t("Chart rendering requires `matplotlib`. Please install it with: `pip install matplotlib`", "图表渲染需要 `matplotlib`。请安装：`pip install matplotlib`"))
     
     with viz_tab2:
         # Cost analysis
@@ -2385,24 +2386,24 @@ def _display_leaderboard(
                      for m in sorted_metrics]
             
             ax1.barh(strategy_names, costs, color=colors)
-            ax1.set_xlabel('单次平均成本 ($)', fontsize=12, fontweight='bold')
-            ax1.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax1.set_title('单次查询成本对比（成本越低越好）', fontsize=14, fontweight='bold', pad=20)
+            ax1.set_xlabel('Average Cost per Query ($)', fontsize=12, fontweight='bold')
+            ax1.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax1.set_title('Per-Query Cost Comparison (lower is better)', fontsize=14, fontweight='bold', pad=20)
             ax1.grid(axis='x', alpha=0.3)
             
             # Total cost
             total_costs = [m.total_cost for m in sorted_metrics]
             ax2.barh(strategy_names, total_costs, color=colors)
-            ax2.set_xlabel('总压测成本 ($)', fontsize=12, fontweight='bold')
-            ax2.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax2.set_title('总成本对比（成本越低越好）', fontsize=14, fontweight='bold', pad=20)
+            ax2.set_xlabel('Total Benchmark Cost ($)', fontsize=12, fontweight='bold')
+            ax2.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax2.set_title('Total Cost Comparison (lower is better)', fontsize=14, fontweight='bold', pad=20)
             ax2.grid(axis='x', alpha=0.3)
             
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
         else:
-            st.info("图表功能需要 matplotlib 库。")
+            st.info(t("Chart rendering requires `matplotlib`.", "图表渲染需要 `matplotlib`。"))
     
     with viz_tab3:
         # Latency analysis
@@ -2428,24 +2429,24 @@ def _display_leaderboard(
             # Average latency
             avg_lats = [m.avg_latency_s for m in sorted_metrics]
             ax1.barh(strategy_names, avg_lats, color=colors)
-            ax1.set_xlabel('平均生成时长 (秒)', fontsize=12, fontweight='bold')
-            ax1.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax1.set_title('平均延迟对比（延迟越低越好）', fontsize=14, fontweight='bold', pad=20)
+            ax1.set_xlabel('Average Generation Time (s)', fontsize=12, fontweight='bold')
+            ax1.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax1.set_title('Average Latency Comparison (lower is better)', fontsize=14, fontweight='bold', pad=20)
             ax1.grid(axis='x', alpha=0.3)
             
             # P95 latency
             p95_lats = [m.p95_latency_s for m in sorted_metrics]
             ax2.barh(strategy_names, p95_lats, color=colors)
-            ax2.set_xlabel('P95 延迟 (秒)', fontsize=12, fontweight='bold')
-            ax2.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax2.set_title('P95 延迟对比（延迟越低越好）', fontsize=14, fontweight='bold', pad=20)
+            ax2.set_xlabel('P95 Latency (s)', fontsize=12, fontweight='bold')
+            ax2.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax2.set_title('P95 Latency Comparison (lower is better)', fontsize=14, fontweight='bold', pad=20)
             ax2.grid(axis='x', alpha=0.3)
             
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
         else:
-            st.info("图表功能需要 matplotlib 库。")
+            st.info(t("Chart rendering requires `matplotlib`.", "图表渲染需要 `matplotlib`。"))
     
     with viz_tab4:
         # Quality analysis
@@ -2472,9 +2473,9 @@ def _display_leaderboard(
             qualities = [m.avg_quality_score * 100 for m in sorted_metrics]  # Convert to percentage
             
             bars = ax.barh(strategy_names, qualities, color=colors)
-            ax.set_xlabel('平均质量得分 (%)', fontsize=12, fontweight='bold')
-            ax.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax.set_title('平均质量得分对比（质量越高越好）\n注：平均质量得分 = (Faithfulness + Answer Relevancy + Context Precision) / 3', 
+            ax.set_xlabel('Average Quality Score (%)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax.set_title('Average Quality Score Comparison (higher is better)\nNote: average quality score = (Faithfulness + Answer Relevancy + Context Precision) / 3', 
                         fontsize=14, fontweight='bold', pad=20)
             ax.set_xlim(0, 100)
             ax.grid(axis='x', alpha=0.3)
@@ -2490,7 +2491,7 @@ def _display_leaderboard(
             plt.close(fig)
             
             # RAGAS detailed metrics comparison (grouped bar chart)
-            st.markdown("#### 📊 RAGAS 详细指标对比")
+            st.markdown("#### 📊 Detailed RAGAS Metric Comparison")
             
             # Filter metrics that have RAGAS data
             metrics_with_ragas = [
@@ -2516,13 +2517,13 @@ def _display_leaderboard(
                 context_precision_vals = [(m.avg_context_precision * 100) if m.avg_context_precision is not None else 0 
                                           for m in sorted_ragas]
                 
-                bars1 = ax.bar(x - width, faithfulness_vals, width, label='Faithfulness (忠实度)', color='#FF6B6B')
-                bars2 = ax.bar(x, answer_relevancy_vals, width, label='Answer Relevancy (答案相关性)', color='#4ECDC4')
-                bars3 = ax.bar(x + width, context_precision_vals, width, label='Context Precision (上下文精确度)', color='#95E1D3')
+                bars1 = ax.bar(x - width, faithfulness_vals, width, label='Faithfulness', color='#FF6B6B')
+                bars2 = ax.bar(x, answer_relevancy_vals, width, label='Answer Relevancy', color='#4ECDC4')
+                bars3 = ax.bar(x + width, context_precision_vals, width, label='Context Precision', color='#95E1D3')
                 
-                ax.set_xlabel('策略名称', fontsize=12, fontweight='bold')
-                ax.set_ylabel('得分 (%)', fontsize=12, fontweight='bold')
-                ax.set_title('RAGAS 详细指标对比（分数越高越好）', fontsize=14, fontweight='bold', pad=20)
+                ax.set_xlabel('Strategy', fontsize=12, fontweight='bold')
+                ax.set_ylabel('Score (%)', fontsize=12, fontweight='bold')
+                ax.set_title('Detailed RAGAS Metric Comparison (higher is better)', fontsize=14, fontweight='bold', pad=20)
                 ax.set_xticks(x)
                 ax.set_xticklabels(strategy_names_ragas, rotation=45, ha='right')
                 ax.set_ylim(0, 100)
@@ -2541,7 +2542,7 @@ def _display_leaderboard(
                 st.pyplot(fig, use_container_width=True)
                 plt.close(fig)
             else:
-                st.info("暂无 RAGAS 详细指标数据。")
+                st.info(t("No detailed RAGAS metric data is available yet.", "暂无详细 RAGAS 指标数据。"))
             
             # Route-accuracy plots intentionally removed from leaderboard analytics.
     
@@ -2571,24 +2572,24 @@ def _display_leaderboard(
             # Average latency (generation time)
             avg_lats = [m.avg_latency_s for m in sorted_metrics]
             ax1.barh(strategy_names, avg_lats, color=colors)
-            ax1.set_xlabel('平均生成时长 (秒)', fontsize=12, fontweight='bold')
-            ax1.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax1.set_title('平均生成时长对比（时间越短越好）', fontsize=14, fontweight='bold', pad=20)
+            ax1.set_xlabel('Average Generation Time (s)', fontsize=12, fontweight='bold')
+            ax1.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax1.set_title('Average Generation Time Comparison (shorter is better)', fontsize=14, fontweight='bold', pad=20)
             ax1.grid(axis='x', alpha=0.3)
             
             # Evaluation time
             eval_times = [m.avg_eval_time_s for m in sorted_metrics]
             ax2.barh(strategy_names, eval_times, color=colors)
-            ax2.set_xlabel('平均评估时长 (秒)', fontsize=12, fontweight='bold')
-            ax2.set_ylabel('策略名称', fontsize=12, fontweight='bold')
-            ax2.set_title('平均评估时长对比（时间越短越好）', fontsize=14, fontweight='bold', pad=20)
+            ax2.set_xlabel('Average Evaluation Time (s)', fontsize=12, fontweight='bold')
+            ax2.set_ylabel('Strategy', fontsize=12, fontweight='bold')
+            ax2.set_title('Average Evaluation Time Comparison (shorter is better)', fontsize=14, fontweight='bold', pad=20)
             ax2.grid(axis='x', alpha=0.3)
             
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
         else:
-            st.info("图表功能需要 matplotlib 库。")
+            st.info(t("Chart rendering requires `matplotlib`.", "图表渲染需要 `matplotlib`。"))
 
 
 # Helper functions
@@ -2850,26 +2851,26 @@ def _load_benchmark_history() -> List[Dict[str, Any]]:
 
 def _render_benchmark_history() -> None:
     """Render benchmark history view."""
-    st.markdown("#### 📈 历史压测结果")
-    st.markdown("查看之前完成的压测结果，包括排行榜和可视化分析。")
+    st.markdown("#### 📈 Benchmark History")
+    st.markdown("Review previously completed benchmark runs, including leaderboards and visual analysis.")
     
     history = _load_benchmark_history()
     if not history:
-        st.info("📭 暂无历史记录。完成一次压测后，结果会自动保存到这里。")
+        st.info(t("📭 No benchmark history is available yet. Completed runs will appear here automatically.", "📭 暂无压测历史。完成的运行会自动显示在这里。"))
         return
     
     # Show history list
-    st.markdown(f"**共找到 {len(history)} 条历史记录**（按时间倒序）")
+    st.markdown(f"**{len(history)} history entries found** (newest first)")
     
     # Create selection dropdown
     history_options = [
         f"{entry.get('run_name', entry.get('timestamp', 'Unknown'))} - {entry.get('test_set_name', 'Unknown')} "
-        f"({entry.get('total_strategies', 0)} 个策略, {entry.get('total_test_cases', 0)} 个测试用例)"
+        f"({entry.get('total_strategies', 0)} strategies, {entry.get('total_test_cases', 0)} test cases)"
         for entry in history
     ]
     
     selected_idx = st.selectbox(
-        "选择要查看的历史记录",
+        "Select a history entry",
         options=range(len(history)),
         format_func=lambda x: history_options[x],
         key="benchmark_history_select",
@@ -2882,20 +2883,20 @@ def _render_benchmark_history() -> None:
         st.markdown("---")
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("运行名称", selected_entry.get("run_name", selected_entry.get("timestamp", "Unknown")))
+            st.metric(t("Run Name", "运行名称"), selected_entry.get("run_name", selected_entry.get("timestamp", "Unknown")))
         with col2:
-            st.metric("策略数", selected_entry.get("total_strategies", 0))
+            st.metric(t("Strategies", "策略数"), selected_entry.get("total_strategies", 0))
         with col3:
-            st.metric("测试用例数", selected_entry.get("total_test_cases", 0))
+            st.metric(t("Test Cases", "测试用例数"), selected_entry.get("total_test_cases", 0))
         
-        st.caption(f"测试集: `{selected_entry.get('test_set_name', 'Unknown')}` | 时间: {selected_entry.get('timestamp', 'Unknown')}")
+        st.caption(f"Test set: `{selected_entry.get('test_set_name', 'Unknown')}` | Time: {selected_entry.get('timestamp', 'Unknown')}")
         if selected_entry.get("fast_mode"):
-            st.caption("⚡ 加速模式已启用")
+            st.caption(t("⚡ Fast mode was enabled", "⚡ 已启用加速模式"))
         
         # Show note if available
         run_note = selected_entry.get("run_note", "")
         if run_note:
-            with st.expander("📝 更新备注", expanded=False):
+            with st.expander(t("📝 Run Notes", "📝 运行备注"), expanded=False):
                 st.markdown(run_note)
         
         # Reconstruct StrategyMetrics from saved data
@@ -2935,7 +2936,7 @@ def _render_benchmark_history() -> None:
             scoring_engine = _create_arena_scoring_engine()
             _display_leaderboard(reconstructed_metrics, scoring_engine)
         else:
-            st.warning("⚠️ 该历史记录中没有可显示的评估结果。")
+            st.warning(t("⚠️ This history entry does not contain displayable evaluation results.", "⚠️ 该历史记录不包含可显示的评估结果。"))
 
 
 

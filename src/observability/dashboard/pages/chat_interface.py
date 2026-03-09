@@ -22,9 +22,11 @@ from pathlib import Path
 
 import streamlit as st
 
+from src.observability.dashboard.i18n import localized_mode, mode_options, t
+
 logger = logging.getLogger(__name__)
 
-CHAT_MODE_OPTIONS = ["快速", "思考", "Pro"]
+CHAT_MODE_OPTIONS = mode_options()
 
 
 # ── Chat history persistence ──────────────────────────────────────────────
@@ -81,9 +83,7 @@ def _resolve_ui_language(query: str) -> str:
 
 def _citation_label(count: int, ui_language: str) -> str:
     """Build citations expander label in target language."""
-    if ui_language == "English":
-        return f"📚 Sources ({count})"
-    return f"📚 引用来源（{count}）"
+    return t(f"📚 Sources ({count})", f"📚 引用来源（{count}）")
 
 
 def _ensure_storage_dir() -> None:
@@ -101,6 +101,9 @@ def _load_conversations_from_disk() -> List[Dict[str, Any]]:
             with _CHAT_STORAGE_PATH.open("r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, list):
+                for conv in data:
+                    if isinstance(conv, dict) and conv.get("title") in {"新对话", "New Chat"}:
+                        conv["title"] = t("New Chat", "新对话")
                 return data
             logger.warning("Chat history file has unexpected format, resetting.")
     except Exception as exc:
@@ -209,7 +212,7 @@ def _initialize_session_state() -> None:
     
     # Initialize selected model (default to benchmark model)
     if "selected_chat_mode" not in st.session_state:
-        st.session_state.selected_chat_mode = "快速"
+        st.session_state.selected_chat_mode = "Fast"
 
 
 def _get_current_conversation() -> Optional[Dict[str, Any]]:
@@ -220,6 +223,13 @@ def _get_current_conversation() -> Optional[Dict[str, Any]]:
         if conv["id"] == st.session_state.current_conversation_id:
             return conv
     return None
+
+
+def _display_conversation_title(title: str) -> str:
+    """Localize the default conversation title while leaving custom titles unchanged."""
+    if title in {"New Chat", "新对话"}:
+        return t("New Chat", "新对话")
+    return title
 
 
 def _get_benchmark_model_id(settings: Any) -> str:
@@ -261,8 +271,8 @@ def _initialize_chat_models() -> None:
         # Register Ollama models
         if "ollama" in available_providers:
             ollama_models = [
-                ("ollama-qwen2.5:0.5b", "qwen2.5:0.5b", "Ollama Qwen2.5 0.5B (极速)"),
-                ("ollama-qwen2.5:1.5b", "qwen2.5:1.5b", "Ollama Qwen2.5 1.5B (推荐)"),
+                ("ollama-qwen2.5:0.5b", "qwen2.5:0.5b", "Ollama Qwen2.5 0.5B (Ultra Fast)"),
+                ("ollama-qwen2.5:1.5b", "qwen2.5:1.5b", "Ollama Qwen2.5 1.5B (Recommended)"),
             ]
             
             for display_name, model_name, description in ollama_models:
@@ -310,7 +320,7 @@ def _initialize_chat_models() -> None:
         logger.info("Chat models initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize chat models: {e}")
-        st.error(f"模型初始化失败: {e}")
+        st.error(t("Model initialization failed: ", "模型初始化失败：") + str(e))
 
 
 def _pick_model_id_for_mode(query: str) -> Optional[str]:
@@ -323,7 +333,7 @@ def _pick_model_id_for_mode(query: str) -> Optional[str]:
     if not all_models:
         return None
 
-    selected_mode = st.session_state.get("selected_chat_mode", "快速")
+    selected_mode = st.session_state.get("selected_chat_mode", "Fast")
     benchmark_id = st.session_state.get("benchmark_model_id")
 
     def _match_id(keywords: List[str]) -> Optional[str]:
@@ -336,10 +346,10 @@ def _pick_model_id_for_mode(query: str) -> Optional[str]:
     gpt4o_mini_id = _match_id(["gpt", "4o", "mini"]) or benchmark_id or all_models[0].model_id
     qwen_05b_id = _match_id(["qwen2.5", "0.5b"]) or _match_id(["qwen", "0.5b"])
 
-    if selected_mode in ("快速", "Pro"):
+    if selected_mode in ("Fast", "Pro"):
         return gpt4o_mini_id
 
-    # 思考模式: simple query -> qwen 0.5b, complex query -> gpt-4o-mini
+    # Think mode: simple query -> qwen 0.5b, complex query -> gpt-4o-mini
     query_text = (query or "").strip().lower()
     complex_signals = [
         "why", "compare", "tradeoff", "architecture", "design", "deep",
@@ -357,7 +367,7 @@ def _create_new_conversation() -> str:
     conv_id = str(uuid.uuid4())
     conv = {
         "id": conv_id,
-        "title": "新对话",
+        "title": t("New Chat", "新对话"),
         "messages": [],
         "created_at": "Now",
     }
@@ -549,7 +559,12 @@ def _query_knowledge_base(query: str, collection: Optional[str] = None, top_k: i
     except Exception as e:
         logger.exception(f"Query failed: {e}")
         return {
-            "content": f"## 查询错误\n\n查询时发生错误：{str(e)}\n\n请检查配置和日志。",
+            "content": (
+                f"## {t('Query Error', '查询错误')}\n\n"
+                + t("An error occurred while processing the query: ", "查询时发生错误：")
+                + f"{str(e)}\n\n"
+                + t("Please check the configuration and logs.", "请检查配置和日志。")
+            ),
             "citations": [],
             "is_empty": True,
         }
@@ -566,17 +581,17 @@ def render() -> None:
     _initialize_session_state()
     
     # Sidebar: New conversation button
-    if st.sidebar.button("➕ 发起新对话", use_container_width=True):
+    if st.sidebar.button(t("➕ New Chat", "➕ 新对话"), use_container_width=True):
         _create_new_conversation()
         st.rerun()
     
     # Sidebar: Conversation history
-    st.sidebar.title("对话历史")
+    st.sidebar.title(t("Conversation History", "对话历史"))
     
     for conv in st.session_state.conversations:
         is_selected = conv["id"] == st.session_state.current_conversation_id
         if st.sidebar.button(
-            conv["title"],
+            _display_conversation_title(conv["title"]),
             key=f"sidebar_conv_{conv['id']}",
             use_container_width=True,
             type="primary" if is_selected else "secondary",
@@ -586,30 +601,36 @@ def render() -> None:
     
     # Sidebar: Mode selection
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**回答模式**")
-    default_mode = st.session_state.get("selected_chat_mode", "快速")
+    st.sidebar.markdown(f"**{t('Response Mode', '回答模式')}**")
+    default_mode = st.session_state.get("selected_chat_mode", "Fast")
     mode_index = CHAT_MODE_OPTIONS.index(default_mode) if default_mode in CHAT_MODE_OPTIONS else 0
     selected_mode = st.sidebar.selectbox(
-        "选择模式",
+        t("Choose mode", "选择模式"),
         options=CHAT_MODE_OPTIONS,
         index=mode_index,
         key="chat_mode_selector",
-        help="仅暴露模式，不暴露底层模型。",
+        format_func=localized_mode,
+        help=t("Expose only the interaction mode, not the underlying model.", "只展示交互模式，不展示底层模型。"),
     )
     st.session_state.selected_chat_mode = selected_mode
-    st.sidebar.caption("快速：速度/成本优先；思考：复杂问题优先；Pro：综合体验。")
+    st.sidebar.caption(
+        t(
+            "Fast: speed/cost first. Think: better for complex questions. Pro: balanced overall experience.",
+            "快速：优先速度和成本。思考：更适合复杂问题。Pro：综合体验更均衡。",
+        )
+    )
     
     # Sidebar: User info
     st.sidebar.markdown("---")
-    st.sidebar.markdown("**用户**")
-    st.sidebar.caption("设置")
+    st.sidebar.markdown(f"**{t('User', '用户')}**")
+    st.sidebar.caption(t("Settings", "设置"))
     
     # Main chat area: Title
     current_conv = _get_current_conversation()
     if current_conv:
-        st.title(current_conv["title"])
+        st.title(_display_conversation_title(current_conv["title"]))
     else:
-        st.title("新对话")
+        st.title(t("New Chat", "新对话"))
     
     # Main chat area: Display messages
     for idx, msg in enumerate(st.session_state.messages):
@@ -646,7 +667,7 @@ def render() -> None:
                                 source_label += (
                                     f" (page {page})"
                                     if ui_language == "English"
-                                    else f" (第 {page} 页)"
+                                    else f" (page {page})"
                                 )
 
                             if isinstance(source, str) and (
@@ -661,7 +682,7 @@ def render() -> None:
                             st.markdown("---")
     
     # Main chat area: Input
-    if prompt := st.chat_input("输入消息..."):
+    if prompt := st.chat_input(t("Type your message...", "输入消息...")):
         # Record start time
         import time
         start_time = time.monotonic()
@@ -685,13 +706,9 @@ def render() -> None:
         with st.chat_message("assistant"):
             # Resolve model ID from selected mode
             selected_model_id = _pick_model_id_for_mode(prompt)
-            selected_mode = st.session_state.get("selected_chat_mode", "快速")
+            selected_mode = st.session_state.get("selected_chat_mode", "Fast")
             ui_language = _resolve_ui_language(prompt)
-            spinner_text = (
-                "🔍 Retrieving knowledge base and generating answer..."
-                if ui_language == "English"
-                else "🔍 正在检索知识库并生成回答..."
-            )
+            spinner_text = "🔍 Retrieving knowledge base and generating answer..."
             with st.spinner(spinner_text):
                 result = _query_knowledge_base(prompt, top_k=10, model_id=selected_model_id)
             
@@ -699,9 +716,14 @@ def render() -> None:
             elapsed_time = time.monotonic() - start_time
             
             # Display elapsed time (small, subtle)
-            st.caption(f"⏱️ 运行时间: {elapsed_time:.2f}秒")
+            st.caption(t(f"⏱️ Runtime: {elapsed_time:.2f}s", f"⏱️ 运行时间：{elapsed_time:.2f}秒"))
             if selected_model_id:
-                st.caption(f"🧭 模式: {selected_mode} | 路由模型: {selected_model_id}")
+                st.caption(
+                    t(
+                        f"🧭 Mode: {localized_mode(selected_mode)} | Routed model: {selected_model_id}",
+                        f"🧭 模式：{localized_mode(selected_mode)} | 路由模型：{selected_model_id}",
+                    )
+                )
             
             # Display LLM-generated answer
             st.markdown(result["content"])
@@ -727,7 +749,7 @@ def render() -> None:
                                 source_label += (
                                     f" (page {page})"
                                     if ui_language == "English"
-                                    else f" (第 {page} 页)"
+                                    else f" (page {page})"
                                 )
 
                             if isinstance(source, str) and (

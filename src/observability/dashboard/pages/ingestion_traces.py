@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import streamlit as st
 
+from src.observability.dashboard.i18n import t
 from src.observability.dashboard.services.trace_service import TraceService
 
 logger = logging.getLogger(__name__)
@@ -25,16 +26,16 @@ logger = logging.getLogger(__name__)
 
 def render() -> None:
     """Render the Ingestion Traces page."""
-    st.header("🔬 Ingestion Traces")
+    st.header(t("🔬 Ingestion Traces", "🔬 导入追踪"))
 
     svc = TraceService()
     traces = svc.list_traces(trace_type="ingestion")
 
     if not traces:
-        st.info("No ingestion traces recorded yet. Run an ingestion first!")
+        st.info(t("No ingestion traces recorded yet. Run an ingestion first!", "还没有记录任何导入 trace。请先运行一次导入流程。"))
         return
 
-    st.subheader(f"📋 Trace History ({len(traces)})")
+    st.subheader(t(f"📋 Trace History ({len(traces)})", f"📋 Trace 历史 ({len(traces)})"))
 
     for idx, trace in enumerate(traces):
         trace_id = trace.get("trace_id", "unknown")
@@ -53,8 +54,8 @@ def render() -> None:
             stages_by_name = {t["stage_name"]: t for t in timings}
 
             # ── 1. Overview metrics ────────────────────────────
-            st.markdown("#### 📊 Pipeline Overview")
-            st.caption(f"Source: `{source_path}`")
+            st.markdown(t("#### 📊 Pipeline Overview", "#### 📊 流程总览"))
+            st.caption(f"{t('Source', '来源')}: `{source_path}`")
 
             load_d = stages_by_name.get("load", {}).get("data", {})
             split_d = stages_by_name.get("split", {}).get("data", {})
@@ -64,15 +65,15 @@ def render() -> None:
 
             c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
-                st.metric("Doc Length", f"{load_d.get('text_length', 0):,} chars")
+                st.metric(t("Doc Length", "文档长度"), f"{load_d.get('text_length', 0):,} {t('chars', '字符')}")
             with c2:
-                st.metric("Chunks", split_d.get("chunk_count", 0))
+                st.metric(t("Chunks", "分块数"), split_d.get("chunk_count", 0))
             with c3:
-                st.metric("Images", load_d.get("image_count", 0))
+                st.metric(t("Images", "图片数"), load_d.get("image_count", 0))
             with c4:
-                st.metric("Vectors", upsert_d.get("vector_count", 0))
+                st.metric(t("Vectors", "向量数"), upsert_d.get("vector_count", 0))
             with c5:
-                st.metric("Total Time", total_label)
+                st.metric(t("Total Time", "总耗时"), total_label)
 
             st.divider()
 
@@ -83,13 +84,13 @@ def render() -> None:
                 if t["stage_name"] in ("load", "split", "transform", "embed", "upsert")
             ]
             if main_stages:
-                st.markdown("#### ⏱️ Stage Timings")
+                st.markdown(t("#### ⏱️ Stage Timings", "#### ⏱️ 阶段耗时"))
                 chart_data = {t["stage_name"]: t["elapsed_ms"] for t in main_stages}
                 st.bar_chart(chart_data, horizontal=True)
                 st.table([
                     {
-                        "Stage": t["stage_name"],
-                        "Elapsed (ms)": round(t["elapsed_ms"], 2),
+                        t("Stage", "阶段"): t["stage_name"],
+                        t("Elapsed (ms)", "耗时 (ms)"): round(t["elapsed_ms"], 2),
                     }
                     for t in main_stages
                 ])
@@ -97,7 +98,7 @@ def render() -> None:
             st.divider()
 
             # ── 3. Per-stage detail tabs ───────────────────────
-            st.markdown("#### 🔍 Stage Details")
+            st.markdown(t("#### 🔍 Stage Details", "#### 🔍 阶段详情"))
 
             tab_defs = []
             if "load" in stages_by_name:
@@ -132,7 +133,7 @@ def render() -> None:
                         elif key == "upsert":
                             _render_upsert_stage(data)
             else:
-                st.info("No stage details available.")
+                st.info(t("No stage details available.", "没有可用的阶段详情。"))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -143,11 +144,11 @@ def _render_load_stage(data: Dict[str, Any]) -> None:
     """Render Load stage: raw document preview."""
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Doc ID", data.get("doc_id", "—")[:16])
+        st.metric(t("Doc ID", "文档 ID"), data.get("doc_id", "—")[:16])
     with c2:
-        st.metric("Text Length", f"{data.get('text_length', 0):,}")
+        st.metric(t("Text Length", "文本长度"), f"{data.get('text_length', 0):,}")
     with c3:
-        st.metric("Images", data.get("image_count", 0))
+        st.metric(t("Images", "图片数"), data.get("image_count", 0))
 
     preview = data.get("text_preview", "")
     if preview:
@@ -160,16 +161,16 @@ def _render_load_stage(data: Dict[str, Any]) -> None:
             label_visibility="collapsed",
         )
     else:
-        st.info("No text preview recorded in this trace.")
+        st.info(t("No text preview recorded in this trace.", "该 trace 中没有记录文本预览。"))
 
 
 def _render_split_stage(data: Dict[str, Any]) -> None:
     """Render Split stage: chunk list with texts."""
     c1, c2 = st.columns(2)
     with c1:
-        st.metric("Chunks", data.get("chunk_count", 0))
+        st.metric(t("Chunks", "分块数"), data.get("chunk_count", 0))
     with c2:
-        st.metric("Avg Size", f"{data.get('avg_chunk_size', 0)} chars")
+        st.metric(t("Avg Size", "平均大小"), t(f"{data.get('avg_chunk_size', 0)} chars", f"{data.get('avg_chunk_size', 0)} 字符"))
 
     chunks = data.get("chunks", [])
     if chunks:
@@ -188,7 +189,7 @@ def _render_split_stage(data: Dict[str, Any]) -> None:
                     label_visibility="collapsed",
                 )
     else:
-        st.info("No chunk text recorded. Re-run ingestion to generate new traces.")
+        st.info(t("No chunk text recorded. Re-run ingestion to generate new traces.", "没有记录分块文本。请重新执行导入以生成新的 trace。"))
 
 
 def _render_transform_stage(data: Dict[str, Any]) -> None:
@@ -206,7 +207,7 @@ def _render_transform_stage(data: Dict[str, Any]) -> None:
             f"{data.get('enriched_by_llm', 0)} / {data.get('enriched_by_rule', 0)}",
         )
     with c3:
-        st.metric("Captioned", data.get("captioned_chunks", 0))
+        st.metric(t("Captioned", "已生成描述"), data.get("captioned_chunks", 0))
 
     chunks = data.get("chunks", [])
     if chunks:
@@ -271,7 +272,7 @@ def _render_transform_stage(data: Dict[str, Any]) -> None:
                             label_visibility="collapsed",
                         )
     else:
-        st.info("No per-chunk transform data recorded. Re-run ingestion for new traces.")
+        st.info(t("No per-chunk transform data recorded. Re-run ingestion for new traces.", "没有记录逐分块转换数据。请重新执行导入以生成新的 trace。"))
 
 
 def _render_embed_stage(data: Dict[str, Any]) -> None:
@@ -279,17 +280,17 @@ def _render_embed_stage(data: Dict[str, Any]) -> None:
     # ── Overview metrics ──
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("Dense Vectors", data.get("dense_vector_count", 0))
+        st.metric(t("Dense Vectors", "Dense 向量数"), data.get("dense_vector_count", 0))
     with c2:
-        st.metric("Dimension", data.get("dense_dimension", 0))
+        st.metric(t("Dimension", "维度"), data.get("dense_dimension", 0))
     with c3:
-        st.metric("Sparse Docs", data.get("sparse_doc_count", 0))
+        st.metric(t("Sparse Docs", "Sparse 文档数"), data.get("sparse_doc_count", 0))
     with c4:
-        st.metric("Method", data.get("method", "—"))
+        st.metric(t("Method", "方法"), data.get("method", "—"))
 
     chunks = data.get("chunks", [])
     if not chunks:
-        st.info("No chunk encoding data recorded.")
+        st.info(t("No chunk encoding data recorded.", "没有记录分块编码数据。"))
         return
 
     # ── Dual-path per-chunk table ──
@@ -340,15 +341,15 @@ def _render_upsert_stage(data: Dict[str, Any]) -> None:
     # ── Overview metrics ──
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.metric("Dense Vectors", dense_store.get("count", data.get("vector_count", 0)))
+        st.metric(t("Dense Vectors", "Dense 向量数"), dense_store.get("count", data.get("vector_count", 0)))
     with c2:
-        st.metric("Sparse (BM25)", sparse_store.get("count", data.get("bm25_docs", 0)))
+        st.metric(t("Sparse (BM25)", "Sparse（BM25）"), sparse_store.get("count", data.get("bm25_docs", 0)))
     with c3:
-        st.metric("Images", image_store.get("count", data.get("images_indexed", 0)))
+        st.metric(t("Images", "图片数"), image_store.get("count", data.get("images_indexed", 0)))
 
     # ── Dense store details ──
     if dense_store:
-        with st.expander("🟦 Dense Vector Store (ChromaDB)", expanded=True):
+        with st.expander(t("🟦 Dense Vector Store (ChromaDB)", "🟦 Dense 向量库（ChromaDB）"), expanded=True):
             dc1, dc2 = st.columns(2)
             with dc1:
                 st.markdown(f"**Backend:** `{dense_store.get('backend', '—')}`")
@@ -359,7 +360,7 @@ def _render_upsert_stage(data: Dict[str, Any]) -> None:
 
     # ── Sparse store details ──
     if sparse_store:
-        with st.expander("🟨 Sparse Index (BM25)", expanded=True):
+        with st.expander(t("🟨 Sparse Index (BM25)", "🟨 Sparse 索引（BM25）"), expanded=True):
             sc1, sc2 = st.columns(2)
             with sc1:
                 st.markdown(f"**Backend:** `{sparse_store.get('backend', '—')}`")
@@ -405,6 +406,6 @@ def _render_upsert_stage(data: Dict[str, Any]) -> None:
     if not chunk_mapping and not dense_store:
         vector_ids = data.get("vector_ids", [])
         if vector_ids:
-            with st.expander("Vector IDs", expanded=False):
+            with st.expander(t("Vector IDs", "向量 ID"), expanded=False):
                 for vid in vector_ids:
                     st.code(vid, language=None)
