@@ -1,334 +1,404 @@
 # Modular RAG MCP Server
 
-> 一个可插拔、可观测的模块化 RAG (检索增强生成) 服务框架，通过 MCP (Model Context Protocol) 协议对外暴露工具接口，支持 Copilot / Claude 等 AI 助手直接调用。
+中文 | [English](#english)
 
----
+一个面向知识库问答与 AI Assistant 工具调用场景的模块化 RAG 平台。项目从文档摄取、混合检索、答案生成、评测分析，到 MCP 工具暴露与可视化 Dashboard，形成了一条完整、可扩展、可观测的端到端链路。
 
-## 快速开始
+## 中文
+### 项目简介
+`Modular RAG MCP Server` 是我从零设计并持续迭代的一个本地化、模块化 RAG 系统。它的目标不是只做一个“能回答问题”的检索增强生成 Demo，而是搭建一套可以真正用于工程验证、模型比较、检索调优、链路追踪和 AI 助手接入的完整平台。
 
-### 1. 安装依赖
+这个项目围绕六个核心目标展开：
+- 模块化：检索、重排、生成、评测、可视化彼此解耦，便于替换和扩展。
+- 可观测：查询链路和摄取链路都能记录详细 trace，方便定位问题。
+- 可评测：支持基于 golden set 的批量评估，以及基于 RAGAS 的质量打分。
+- 可路由：支持意图识别、查询复杂度判断和多模型组合策略。
+- 可接入：通过 MCP Server 暴露工具，便于 Copilot、Claude 等客户端调用。
+- 可演示：提供完整 Streamlit Dashboard，适合展示、调试和对比实验。
 
+### 解决的问题
+传统的 RAG Demo 往往只关注“把文档塞进去，然后回答问题”，但一旦进入真实工程场景，就会暴露出很多问题：
+- 文档摄取不可追踪，出错时不知道卡在哪一步。
+- 检索只有单路向量召回，效果不稳定。
+- 模型成本、时延和质量之间难以权衡。
+- 缺少统一的评测基线，无法对不同策略做横向对比。
+- AI Assistant 无法方便地把系统能力作为工具接入。
+
+这个项目就是围绕这些问题建立的。它把“知识库系统”拆成多个可独立演进的能力模块，再通过统一配置和统一接口把它们串起来。
+
+### 整体架构
+项目主要由六层组成：
+
+1. 文档摄取层
+负责文件解析、分块、元数据增强、嵌入编码、向量写入、BM25 写入和图片索引。
+
+2. 检索与路由层
+负责查询预处理、意图识别、复杂度判断、Dense 检索、Sparse 检索、Graph 检索、融合和重排。
+
+3. 响应生成层
+负责把召回结果组织成上下文，调用 LLM 生成答案，并构建引用与多模态返回内容。
+
+4. MCP 工具层
+负责把查询、知识库列表、文档摘要等能力暴露成 MCP 工具，供外部 AI 客户端调用。
+
+5. 可观测与评测层
+负责记录查询与摄取 trace，运行 RAGAS / Custom evaluator，并输出指标与历史结果。
+
+6. Dashboard 展示层
+基于 Streamlit 提供总览、数据浏览、摄取管理、追踪分析、Chat、评测面板和 LLM Arena。
+
+### 端到端工作流
+#### 1. 摄取流程
+一篇文档进入系统后，会经历以下步骤：
+- Loader 解析原始文件内容，支持 `PDF` 和 `Markdown`。
+- Chunker 将长文切分为适合检索和生成的文本块。
+- Transform 模块可做块精炼、元数据增强和图片描述注入。
+- Embedding 模块生成 Dense / Sparse 表示。
+- Storage 模块把内容写入 Chroma、BM25 和图片索引。
+- Integrity 模块记录文件哈希与摄取状态，支持去重与增量更新。
+
+#### 2. 查询流程
+一次查询进入系统后，会经历以下步骤：
+- `QueryProcessor` 做规范化、关键词提取和过滤器解析。
+- `IntentRouter` 进行垃圾流量拦截和业务意图判断。
+- `QueryComplexityClassifier` 用于 simple / complex 路由决策。
+- `HybridSearch` 组合 Dense、Sparse、Graph 三类召回。
+- `Fusion` 使用 RRF 进行融合。
+- `Reranker` 对候选结果进行二次排序。
+- `RAGGenerator` 基于检索结果生成最终答案。
+- `CitationGenerator` 和多模态组装模块输出引用和图片结果。
+
+### 核心能力
+#### 1. 模块化检索
+- Dense Retrieval
+- Sparse Retrieval (BM25)
+- Graph Retrieval
+- RRF Fusion
+- Cross-Encoder / LLM Rerank
+
+#### 2. 模型路由与意图能力
+- 双层意图路由
+- 文档级 `doc_intent` 分类
+- 查询复杂度分类
+- 小模型 + 大模型混合策略
+- 多模型横向 benchmark
+
+#### 3. 可观测性
+- Query Trace
+- Ingestion Trace
+- 分阶段耗时记录
+- 中间状态可视化
+- Dashboard 中的瀑布图和详情面板
+
+#### 4. 评测能力
+- Golden test set 批量评测
+- RAGAS 三项质量指标
+- 自定义轻量评估器
+- LLM Arena 批量压测
+- 成本、时延、质量综合对比
+
+### Dashboard 页面
+当前 Dashboard 提供 8 个页面：
+- `Overview`: 查看系统配置、知识库统计和追踪概况。
+- `Chat`: 在 Dashboard 内直接进行 RAG 对话，支持历史会话与模型切换。
+- `Data Browser`: 浏览文档、Chunk、元数据和图片。
+- `Ingestion Manager`: 上传文件、执行摄取、查看并管理文档。
+- `Ingestion Traces`: 查看摄取链路的阶段耗时和详细数据。
+- `Query Traces`: 查看查询链路的检索、融合、重排和回答过程。
+- `Evaluation Panel`: 运行检索评估并查看历史结果。
+- `LLM Arena`: 进行单次对弈与批量压测，对比多模型组合策略。
+
+Dashboard 还支持全局中英文界面切换。
+
+### 目录结构
+```text
+src/
+├── core/                  # 查询、响应、配置、trace 等核心流程
+├── ingestion/             # 摄取 pipeline、分块、存储、transform
+├── libs/                  # 各类可插拔后端实现
+├── mcp_server/            # MCP 协议和工具暴露
+└── observability/         # Dashboard、评测与日志
+
+scripts/                   # 启动、摄取、查询、评测、训练与诊断脚本
+tests/                     # unit / integration / e2e 测试
+data/                      # 本地索引、模型、训练集、聊天记录等
+logs/                      # trace、benchmark、evaluation 历史记录
+config/                    # 主配置与 prompt 配置
+```
+
+### 技术特点
+这个项目的重点不只是“功能全”，而是工程结构可解释、可验证、可替换：
+- 配置驱动：LLM、Embedding、向量库、Reranker 均可通过配置切换。
+- 工厂模式：不同 provider 通过 factory 统一实例化。
+- 本地优先：支持本地模型、本地向量库、本地评测历史。
+- 可扩展：新增检索器、重排器、评测器的成本较低。
+- 实验友好：适合做 A/B 检索对比和多模型策略验证。
+
+### 适用场景
+这个项目适合以下用途：
+- 个人或团队搭建本地知识库问答系统
+- 为 AI Assistant 提供可调用的 MCP 工具
+- 做 RAG 检索策略实验与评测
+- 做多模型路由与成本优化研究
+- 做课程、作品集或技术展示项目
+
+### 快速启动
 ```bash
-# 克隆仓库后进入项目目录
-cd MODULAR-RAG-MCP-SERVER-main
-
-# 创建虚拟环境（推荐）
 python -m venv .venv
-# Windows PowerShell:
-.\.venv\Scripts\Activate.ps1
-python scripts/start_dashboard.py
-# Linux/macOS:
-# source .venv/bin/activate
 
-# 安装项目依赖
-pip install -e .
-
-# 开发/测试额外依赖（可选）
-pip install -e ".[dev]"
-```
-
-### 2. 配置 API Key
-
-编辑 `config/settings.yaml`，至少配置 LLM 与 Embedding 的 API 密钥与端点（见下方 [配置说明](#配置说明)）。  
-也可通过环境变量设置，例如：
-
-- **Azure OpenAI**：`AZURE_OPENAI_API_KEY`、`AZURE_OPENAI_ENDPOINT`（若在 settings 中未填 endpoint）
-- **OpenAI**：`OPENAI_API_KEY`
-
-#### RAGAS 评估专用配置
-
-RAGAS 评估（LLM-as-Judge）使用独立的 OpenAI 兼容 API，**不受主业务 LLM 配置影响**，始终使用 `gpt-4o-mini` 进行快速评估。需要设置以下环境变量：
-
-- **`EVAL_API_KEY`**（必需）：用于 RAGAS 评估的 OpenAI 兼容 API 密钥
-- **`EVAL_BASE_URL`**（可选）：API 基础 URL，默认为 `https://api.openai.com/v1`
-
-```bash
 # Windows PowerShell
-$env:EVAL_API_KEY="your-openai-api-key"
-$env:EVAL_BASE_URL="https://api.openai.com/v1"  # 可选
+.\.venv\Scripts\Activate.ps1
 
-# Linux/macOS
-export EVAL_API_KEY="your-openai-api-key"
-export EVAL_BASE_URL="https://api.openai.com/v1"  # 可选
+pip install -e .
+pip install -e ".[dev]"
+pip install -e ".[train]"
 ```
 
-> **注意**：即使主业务使用本地 Ollama 模型，RAGAS 评估也会使用配置的 OpenAI 兼容 API，确保评估速度和稳定性。
-
-### 3. 运行首次摄取
+配置好 `config/settings.yaml` 后，可以这样启动：
 
 ```bash
-# 将示例文档摄入默认 collection
+# 文档摄取
 python scripts/ingest.py --path tests/fixtures/sample_documents/ --collection default
 
-# 指定单文件
-python scripts/ingest.py --path path/to/your.pdf --collection my_docs
-```
-
-### 4. 查询与 MCP
-
-```bash
 # 命令行查询
-python scripts/query.py --query "你的问题" --verbose
+python scripts/query.py --query "What is Modular RAG?" --verbose
 
-# MCP Server 以 stdio 方式运行，供 Copilot / Claude 等连接（见下方 MCP 配置示例）
+# 启动 Dashboard
+python scripts/start_dashboard.py
+
+# 启动 MCP Server
 python -m src.mcp_server.server
 ```
 
----
+### 常用脚本
+- `scripts/ingest.py`: 执行文档摄取
+- `scripts/query.py`: 命令行查询
+- `scripts/evaluate.py`: 跑评测流程
+- `scripts/start_dashboard.py`: 启动 Dashboard
+- `scripts/train_intent_model.py`: 训练意图识别模型
+- `scripts/train_query_complexity_model.py`: 训练复杂度分类模型
+- `scripts/train_spam_model.py`: 训练垃圾流量分类模型
+- `scripts/test_llm_arena.py`: 检查 LLM Arena 调用链路
 
-## 新增能力速览（2026-03）
+### 当前项目状态
+目前项目已经具备完整的原型系统能力：
+- 从文档摄取到查询回答的主链路已打通
+- Dashboard 多页面已可用
+- LLM Arena 与 Evaluation Panel 已可用于对比实验
+- 意图识别、复杂度分类和模型路由能力已接入
+- RAGAS 与自定义评估已具备基础能力
 
-- **Dashboard 已升级为 8 页面**：在原有管理页面基础上新增 `Chat` 与 `LLM Arena`。
-- **Chat 页面增强**：支持会话持久化（`data/chat/conversations.json`）、模型选择器、运行时间展示、引用来源折叠查看。
-- **LLM Arena 压测台**：支持单次互动测试 + 批量压测（动态排行榜、历史记录、进度恢复、时延/成本/质量对比）。
-- **文档类型扩展**：Ingestion 现支持 `.md`（`MarkdownLoader`），由 Pipeline 按扩展名自动选择 Loader。
-- **意图能力增强**：新增文档级 `doc_intent` 标注与意图文件库视图（`data/documents_by_intent/{intent}/{collection}/`）。
-- **查询路由增强**：新增双层意图路由与本地查询复杂度分类能力（simple/complex）用于模型路由。
+这个项目仍然保留了继续迭代的空间，例如：
+- 提升意图分类准确率
+- 补全检索级 ground truth，完善 Hit Rate / MRR 统计
+- 丰富 Graph Retrieval 的真实召回能力
+- 增强 MCP Server 的生产化能力
 
----
-
-## 配置说明
-
-主配置文件为 **`config/settings.yaml`**。主要字段含义如下。
-
-| 区块 | 字段 | 含义 |
-|------|------|------|
-| **llm** | `provider` | 取值：`openai` / `azure` / `ollama` / `deepseek` |
-| | `model`, `deployment_name` | 模型名 / Azure 部署名 |
-| | `azure_endpoint`, `api_key` | Azure/OpenAI 端点与密钥（可改用环境变量） |
-| | `temperature`, `max_tokens` | 生成参数 |
-| **embedding** | `provider` | `openai` / `azure` / `ollama` |
-| | `model`, `dimensions` | 模型名与向量维度（如 1536） |
-| | `azure_endpoint`, `deployment_name`, `api_key` | Azure Embedding 配置 |
-| **vision_llm** | `enabled` | 是否启用多模态（如图片描述） |
-| | `provider`, `model` | 同 LLM，用于图片理解 |
-| **vector_store** | `provider` | 当前支持 `chroma` |
-| | `persist_directory` | Chroma 持久化目录（如 `./data/db/chroma`） |
-| | `collection_name` | 默认 collection 名 |
-| **retrieval** | `dense_top_k`, `sparse_top_k`, `fusion_top_k` | 检索与融合数量 |
-| | `rrf_k` | RRF 融合常数 |
-| **rerank** | `enabled`, `provider` | 是否启用、类型（`none` / `cross_encoder` / `llm`） |
-| | `model`, `top_k` | 模型与截断条数 |
-| **observability** | `log_level` | 日志级别：DEBUG / INFO / WARNING / ERROR |
-| | `trace_enabled`, `trace_file` | 是否写追踪、追踪文件路径（如 `./logs/traces.jsonl`） |
-| **ingestion** | `chunk_size`, `chunk_overlap` | 分块大小与重叠 |
-| | `splitter` | 分块方式：`recursive` / `semantic` / `fixed_length` |
-| | `chunk_refiner.use_llm`, `metadata_enricher.use_llm` | 是否用 LLM 做块精炼/元数据增强 |
-
-未填写的 `api_key` / `azure_endpoint` 会从环境变量读取（如 `AZURE_OPENAI_API_KEY`）。
-
-新增相关配置建议关注：
-
-- **查询路由与模型选择**：如启用意图/复杂度路由，建议在配置中明确小模型与大模型的候选集合。
-- **可观测性**：`observability.trace_enabled` 与 `observability.trace_file` 建议在调试时开启，生产或性能压测时按需关闭。
-- **文档意图视图**：启用文档意图标注后，原始文件会同步到 `data/documents_by_intent/{intent}/{collection}/`，便于人工巡检。
+### 这个项目的价值
+对我来说，这个项目不是单点功能的拼装，而是一套完整的 RAG 工程化实践：
+- 我不仅实现了检索增强生成本身，还把评测、可视化、模型路由和工具接入都做成了统一体系。
+- 我不仅关注“能不能回答”，也关注“为什么这样回答、链路哪里耗时、哪种策略更优、成本是否可接受”。
+- 它既可以作为作品集项目，也可以作为后续继续演进成生产级知识系统的基础框架。
 
 ---
 
-## MCP 配置示例
+## English
+### Project Overview
+`Modular RAG MCP Server` is an end-to-end modular RAG platform that I designed and iterated from scratch. It is not just a simple retrieval-augmented QA demo. Instead, it is a full engineering-oriented system that covers document ingestion, hybrid retrieval, answer generation, benchmarking, observability, model routing, MCP tool exposure, and a visual dashboard.
 
-MCP Server 使用 **stdio** 传输，需在客户端配置中指向本项目的 Python 与入口脚本。
+The project is built around six goals:
+- Modularity: retrieval, reranking, generation, evaluation, and visualization are loosely coupled.
+- Observability: both ingestion and query pipelines are traceable.
+- Evaluability: the system supports golden-set benchmarking and RAGAS-based quality scoring.
+- Routability: intent recognition, complexity classification, and multi-model routing are supported.
+- Integrability: system capabilities can be exposed as MCP tools to AI assistants.
+- Demonstrability: a full Streamlit dashboard is provided for inspection, experiments, and demos.
 
-### GitHub Copilot（mcp.json）
+### What This Project Solves
+Many RAG demos stop at "ingest files and answer questions." Real engineering systems need much more:
+- observable ingestion and query pipelines
+- more stable retrieval than a single vector search path
+- cost / latency / quality tradeoff analysis
+- consistent evaluation baselines
+- easy integration with AI assistant clients
 
-在 Copilot 使用的 `mcp.json` 中增加：
+This project addresses those gaps by decomposing a knowledge system into replaceable modules and reconnecting them through shared configuration, factories, and unified interfaces.
 
-```json
-{
-  "mcpServers": {
-    "modular-rag": {
-      "command": "python",
-      "args": [
-        "-m",
-        "src.mcp_server.server"
-      ],
-      "cwd": "C:/path/to/MODULAR-RAG-MCP-SERVER-main",
-      "env": {}
-    }
-  }
-}
+### High-Level Architecture
+The system is organized into six major layers:
+
+1. Ingestion Layer  
+Parses documents, splits them into chunks, enriches metadata, generates embeddings, and writes data into vector, sparse, and image stores.
+
+2. Retrieval and Routing Layer  
+Handles query preprocessing, intent routing, complexity classification, dense retrieval, sparse retrieval, graph retrieval, fusion, and reranking.
+
+3. Response Generation Layer  
+Builds prompt context from retrieved chunks, generates answers through LLMs, and assembles citations or multimodal outputs.
+
+4. MCP Tool Layer  
+Exposes the system as MCP tools for external AI clients such as Claude or Copilot.
+
+5. Observability and Evaluation Layer  
+Records traces, computes evaluation metrics, stores benchmark history, and supports quality inspection.
+
+6. Dashboard Layer  
+Provides a Streamlit UI for system overview, data browsing, chat, evaluation, and model arena experimentation.
+
+### End-to-End Workflow
+#### 1. Ingestion Pipeline
+When a document enters the system, it goes through:
+- file loading
+- chunking
+- optional text refinement
+- metadata enrichment
+- image caption injection
+- dense and sparse encoding
+- vector / BM25 / image indexing
+- integrity tracking for deduplication and incremental ingestion
+
+#### 2. Query Pipeline
+When a user sends a query, the system runs:
+- query normalization and filter parsing
+- intent routing
+- complexity classification
+- dense retrieval
+- sparse retrieval
+- optional graph retrieval
+- RRF fusion
+- reranking
+- answer generation
+- citation and multimodal assembly
+
+### Core Capabilities
+#### 1. Retrieval Stack
+- Dense retrieval
+- Sparse retrieval with BM25
+- Graph retrieval
+- Reciprocal Rank Fusion
+- Optional cross-encoder or LLM reranking
+
+#### 2. Routing and Intent Intelligence
+- two-layer intent router
+- document-level intent classification
+- query complexity classification
+- small-model + large-model hybrid routing
+- multi-model benchmark support
+
+#### 3. Observability
+- query traces
+- ingestion traces
+- stage-level timing
+- intermediate data inspection
+- dashboard waterfall-style analysis
+
+#### 4. Evaluation
+- golden-set benchmarking
+- RAGAS quality scoring
+- lightweight custom evaluator
+- LLM Arena batch benchmarking
+- cost / latency / quality comparison
+
+### Dashboard Pages
+The dashboard currently contains 8 pages:
+- `Overview`
+- `Chat`
+- `Data Browser`
+- `Ingestion Manager`
+- `Ingestion Traces`
+- `Query Traces`
+- `Evaluation Panel`
+- `LLM Arena`
+
+The dashboard also supports global bilingual UI switching between English and Chinese.
+
+### Repository Structure
+```text
+src/
+├── core/                  # core query, response, settings, tracing logic
+├── ingestion/             # ingestion pipeline, chunking, transform, storage
+├── libs/                  # pluggable backend implementations
+├── mcp_server/            # MCP server protocol and tools
+└── observability/         # dashboard, evaluation, logging
+
+scripts/                   # launchers, ingestion, query, eval, training, diagnostics
+tests/                     # unit, integration, and end-to-end tests
+data/                      # local indexes, models, datasets, chat history
+logs/                      # traces and benchmark history
+config/                    # settings and prompt files
 ```
 
-将 `cwd` 改为你本机的项目根目录绝对路径。若需使用虚拟环境：
+### Why This Project Is Strong
+The value of this project is not only feature coverage, but also engineering structure:
+- configuration-driven architecture
+- factory-based backend abstraction
+- local-first experimentation workflow
+- traceable pipeline behavior
+- benchmark-ready model comparison
+- easy extensibility for new retrievers, rerankers, and evaluators
 
-```json
-"command": "C:/path/to/MODULAR-RAG-MCP-SERVER-main/.venv/Scripts/python.exe",
-"args": ["-m", "src.mcp_server.server"],
-"cwd": "C:/path/to/MODULAR-RAG-MCP-SERVER-main",
+### Typical Use Cases
+This project is suitable for:
+- building a local knowledge-base QA system
+- exposing enterprise knowledge tools to AI assistants through MCP
+- experimenting with retrieval strategies
+- testing hybrid model-routing strategies
+- showcasing an end-to-end RAG engineering portfolio project
+
+### Quick Start
+```bash
+python -m venv .venv
+
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+pip install -e .
+pip install -e ".[dev]"
+pip install -e ".[train]"
 ```
 
-### Claude Desktop（claude_desktop_config.json）
-
-在 Claude Desktop 配置目录下的 `claude_desktop_config.json` 中增加：
-
-```json
-{
-  "mcpServers": {
-    "modular-rag": {
-      "command": "python",
-      "args": ["-m", "src.mcp_server.server"],
-      "cwd": "C:/path/to/MODULAR-RAG-MCP-SERVER-main"
-    }
-  }
-}
-```
-
-同样将 `cwd` 改为实际项目路径；若用 venv，可将 `command` 改为 venv 中的 `python` 绝对路径。  
-配置完成后重启 Copilot / Claude Desktop，即可在对话中调用 `query_knowledge_hub`、`list_collections`、`get_document_summary` 等工具。
-
----
-
-## Dashboard 使用指南
-
-基于 Streamlit 的八页管理平台，用于查看配置、浏览数据、管理摄取、查看追踪、在线对话与模型压测。
-
-### 启动方式
+After configuring `config/settings.yaml`, you can run:
 
 ```bash
-# 方式一：脚本启动（推荐使用这个，然后会自动配置环境）
-# .\.venv\Scripts\Activate.ps1 
-# 配置环境不是base之后再运行
+# ingest documents
+python scripts/ingest.py --path tests/fixtures/sample_documents/ --collection default
+
+# run CLI query
+python scripts/query.py --query "What is Modular RAG?" --verbose
+
+# start dashboard
 python scripts/start_dashboard.py
 
-# 指定端口
-python scripts/start_dashboard.py --port 8502
-
-# 方式二：直接 Streamlit
-streamlit run src/observability/dashboard/app.py --server.port 8501
+# start MCP server
+python -m src.mcp_server.server
 ```
 
-浏览器访问 **http://localhost:8501**（或你所设端口）。
+### Useful Scripts
+- `scripts/ingest.py`
+- `scripts/query.py`
+- `scripts/evaluate.py`
+- `scripts/start_dashboard.py`
+- `scripts/train_intent_model.py`
+- `scripts/train_query_complexity_model.py`
+- `scripts/train_spam_model.py`
+- `scripts/test_llm_arena.py`
 
-### 各页面功能
+### Current Project Status
+The project already has a functioning end-to-end prototype:
+- the full ingestion-to-answer pipeline is connected
+- the multi-page dashboard is usable
+- LLM Arena and Evaluation Panel support side-by-side strategy comparison
+- routing, intent, and complexity modules are integrated
+- RAGAS and custom evaluation are available
 
-| 页面 | 功能 |
-|------|------|
-| **Overview（系统总览）** | 组件配置卡片、数据资产统计（collection 数量等） |
-| **Chat（对话）** | Dashboard 内完整 RAG 闭环、引用来源折叠展示、会话持久化、模型选择器、运行时间 |
-| **Data Browser（数据浏览器）** | 按 collection 查看文档列表、Chunk 内容与元数据、图片预览 |
-| **Ingestion Manager（摄取管理）** | 文件上传、触发摄取、进度条、文档删除 |
-| **Ingestion Traces（摄取追踪）** | 摄取历史、阶段耗时瀑布图、trace 详情 |
-| **Query Traces（查询追踪）** | 查询历史、Dense/Sparse 对比、Rerank 前后结果 |
-| **Evaluation Panel（评估面板）** | 运行评估、指标展示、历史趋势 |
-| **LLM Arena（模型竞技场）** | 单次互动测试、批量压测、动态排行榜、历史记录、进度恢复、生成/测评时长分析 |
+There is still room for future improvement:
+- improve intent-classification performance
+- add chunk-level ground truth for retrieval metrics such as Hit Rate and MRR
+- strengthen graph retrieval with richer graph signals
+- harden MCP server behavior for more production-like usage
 
-截图示例可在运行后对上述各页截图保存，用于内部文档或 PR。
-
----
-
-## 运行测试
-
-```bash
-# 单元测试（推荐先跑）
-pytest -q tests/unit/
-
-# 集成测试（可能依赖本地服务/配置）
-pytest -q tests/integration/
-
-# E2E 测试（MCP 子进程、Dashboard 冒烟等）
-pytest -q tests/e2e/
-
-# 全量测试
-pytest -q
-
-# 排除需真实 LLM 的测试
-pytest -q -m "not llm"
-```
-
-常用单文件示例：
-
-```bash
-pytest -q tests/unit/test_smoke_imports.py
-pytest -q tests/e2e/test_mcp_client.py
-pytest -q tests/e2e/test_dashboard_smoke.py
-```
-
-### 诊断与联调脚本（新增）
-
-```bash
-# 检查 LLM Arena 相关模型与配置（本地 Ollama + API）
-python scripts/check_llm_arena_models.py
-
-# 快速验证 LLM Arena 路由与调用链路
-python scripts/test_llm_arena.py
-
-# 验证旧模型引用是否清理完成
-python scripts/verify_model_update.py
-
-# 检查 DeepSeek 主链路连接状态
-python scripts/check_deepseek_connection.py
-
-# 检查 LLM Arena 场景下 DeepSeek 连接状态
-python scripts/check_deepseek_arena.py
-
-# 验证 RAGAS 评估环境变量与调用链路
-python scripts/test_ragas_eval.py
-
-# 训练查询复杂度分类器（simple vs complex）
-python scripts/train_query_complexity_model.py --data data/training/query_complexity_dataset.csv
-```
-
----
-
-## 全链路 E2E 验收（I5）
-
-配置好 API Key 与依赖后，可按以下顺序验证整条链路：
-
-1. **摄取**：`python scripts/ingest.py --path tests/fixtures/sample_documents/ --collection test`
-2. **查询**：`python scripts/query.py --query "测试查询" --verbose`
-3. **Dashboard**：`python scripts/start_dashboard.py`，在浏览器中确认总览、Chat、数据浏览、摄取/查询追踪、LLM Arena 等页面正常。
-4. **评估**：`python scripts/evaluate.py`（需有 golden test set 或相应数据）。
-
-全部通过即表示全链路 E2E 验收完成。
-
----
-
-## 常见问题
-
-### API Key 配置
-
-- **现象**：摄取或查询报错 “API key not provided”。  
-- **处理**：在 `config/settings.yaml` 中填写对应 `llm.api_key` / `embedding.api_key`，或设置环境变量 `AZURE_OPENAI_API_KEY` / `OPENAI_API_KEY`，并确保 endpoint（若用 Azure）正确。
-
-### 依赖安装
-
-- **现象**：`ModuleNotFoundError: No module named 'mcp'` 等。  
-- **处理**：在项目根目录执行 `pip install -e .`，确保安装的是当前项目（含 `pyproject.toml` 中的依赖）。开发时建议 `pip install -e ".[dev]"`。  
-- Windows 下若编码报错，可设置 `PYTHONIOENCODING=utf-8` 再运行脚本或测试。
-
-### 连接与端点
-
-- **现象**：Azure/OpenAI 请求超时或连接失败。  
-- **处理**：检查 `settings.yaml` 中 `azure_endpoint` 是否带 `https://`、是否与 API Key 所在区域一致；本机代理或防火墙是否放行出站 HTTPS。
-
-### MCP 客户端连不上 Server
-
-- **现象**：Copilot / Claude 中看不到工具或调用失败。  
-- **处理**：确认 `mcp.json` / `claude_desktop_config.json` 中 `cwd` 为项目根目录绝对路径；`command`/`args` 能在该 `cwd` 下成功执行 `python -m src.mcp_server.server`；重启客户端后再试。
-
----
-
-## 项目概览与分支说明
-
-- **Ingestion Pipeline**：PDF → 解析 → Chunk → Transform → Embedding → Upsert（支持多模态图片描述）
-- **文档格式支持**：已支持 `.pdf` + `.md`（按扩展名自动选择 Loader）
-- **意图增强**：文档级 `doc_intent` 标注 + 意图文件库视图 + 查询侧双层意图路由
-- **Hybrid Search**：Dense + Sparse (BM25) + RRF Fusion + 可选 Rerank
-- **MCP Server**：stdio 暴露 `query_knowledge_hub`、`list_collections`、`get_document_summary`
-- **Dashboard**：Streamlit 八页（总览 / Chat / 数据浏览 / 摄取管理 / 摄取追踪 / 查询追踪 / 评估面板 / LLM Arena）
-- **模型路由能力**：支持本地查询复杂度分类（simple/complex）与多模型选择
-- **Evaluation**：Ragas + Custom 评估与 golden test set 回归
-
-详细架构与排期见 [DEV_SPEC.md](DEV_SPEC.md)。
-
-| 分支 | 用途 |
-|------|------|
-| **main** | 最新代码，单 commit 完整快照 |
-| **dev** | 开发历史，多 commit 记录 |
-| **clean-start** | 仅骨架 + DEV_SPEC，进度清零，便于从零实现 |
-
----
+### Final Note
+This project represents a full-stack RAG engineering effort rather than a narrow QA demo. It combines retrieval, orchestration, observability, evaluation, routing, and AI-tool integration into one coherent system. That makes it suitable not only as a technical showcase, but also as a practical foundation for continued iteration into a more production-ready knowledge platform.
 
 ## License
-
 MIT
